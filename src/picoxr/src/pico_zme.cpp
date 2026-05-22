@@ -24,10 +24,12 @@
 #include "std_msgs/msg/header.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"  // 添加 JointState 头文件
 
-#include <filesystem>
-
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+
+#include "arm_interfaces/msg/master_arm_command.hpp"
+#include "arm_interfaces/msg/arm_status.hpp"
+
 
 using namespace std::chrono_literals;
 using json = nlohmann::json;
@@ -41,50 +43,6 @@ void callbackForwarder(void* context, PXREAClientCallbackType type, int status, 
   if (g_callback) {
     g_callback(context, type, status, userData);
   }
-}
-
-void print_json(const json& j, int indent=1) {
-    // 根据缩进级别设置空格
-    std::string indent_str(indent * 2, ' ');
-
-    if (j.is_object()) {
-        std::cout << indent_str << "{\n";
-        for (auto it = j.begin(); it != j.end(); ++it) {
-            std::cout << indent_str << "  \"" << it.key() << "\": ";
-            print_json(it.value(), indent + 1);
-            std::cout << ",\n";
-        }
-        // 删除最后一个多余的逗号
-        if (!j.empty()) {
-            std::cout << "\b\b" << std::endl;
-        }
-        std::cout << indent_str << "}";
-    } else if (j.is_array()) {
-        std::cout << indent_str << "[\n";
-        for (const auto& item : j) {
-            std::cout << indent_str << "  ";
-            print_json(item, indent + 1);
-            std::cout << ",\n";
-        }
-        if (!j.empty()) {
-            std::cout << "\b\b" << std::endl;
-        }
-        std::cout << indent_str << "]";
-    } else if (j.is_string()) {
-        std::cout << "\"" << j.get<std::string>() << "\"";
-    } else if (j.is_boolean()) {
-        std::cout << (j.get<bool>() ? "true" : "false");
-    } else if (j.is_number_integer()) {
-        std::cout << j.get<int64_t>();
-    } else if (j.is_number_unsigned()) {
-        std::cout << j.get<uint64_t>();
-    } else if (j.is_number_float()) {
-        std::cout << j.get<double>();
-    } else if (j.is_null()) {
-        std::cout << "null";
-    } else {
-        std::cout << "unknown type";
-    }
 }
 
 std::vector<float> stringToFloatVector(const std::string& input) {
@@ -108,72 +66,29 @@ public:
   {
     publisher_ = this->create_publisher<xr_msgs::msg::Custom>("xr_pose", 10);
     
-    // sim
-    // l_joint_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/xr/move_p", 10);
-    
-    
     // real
-    // l_joint_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/control/move_p", 10);
-    // l_gripper_joint_publisher_ = this->create_publisher<sensor_msgs::msg::JointState>("/control/joint_states", 10);
-    l_joint_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/left/control/move_p", 10);
-    l_gripper_joint_publisher_ = this->create_publisher<sensor_msgs::msg::JointState>("/left/control/joint_states", 10);
-    r_joint_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/right/control/move_p", 10);
-    r_gripper_joint_publisher_ = this->create_publisher<sensor_msgs::msg::JointState>("/right/control/joint_states", 10);
+    xr_pose_publisher_ = this->create_publisher<arm_interfaces::msg::MasterArmCommand>("/tele_vr_cmd", 10);
 
-    l_real_pose_subscriber_ = this->create_subscription<geometry_msgs::msg::PoseStamped>("/left/feedback/tcp_pose", 10, std::bind(&XRNode::lPoseCallback, this, std::placeholders::_1));
-    r_real_pose_subscriber_ = this->create_subscription<geometry_msgs::msg::PoseStamped>("/right/feedback/tcp_pose", 10, std::bind(&XRNode::rPoseCallback, this, std::placeholders::_1));
-    void lPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
-    void rPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
-
-    // // 创建紧急停止服务客户端
-    // l_emergency_stop_client_ = this->create_client<std_srvs::srv::Empty>("/left/emergency_stop");
-    // r_emergency_stop_client_ = this->create_client<std_srvs::srv::Empty>("/right/emergency_stop");
+    real_pose_subscriber_ = this->create_subscription<arm_interfaces::msg::ArmStatus>("/arm_status", 10, std::bind(&XRNode::PoseCallback, this, std::placeholders::_1));
+    void PoseCallback(const arm_interfaces::msg::ArmStatus::SharedPtr msg);
   }
 
   ~XRNode() {
   }
 
-  void lPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  void PoseCallback(const arm_interfaces::msg::ArmStatus::SharedPtr msg)
   {
-    if (l_real_has_new_pose_ == false){
-      l_real_pose.pose.position.x = msg->pose.position.x;
-      l_real_pose.pose.position.y = msg->pose.position.y;
-      l_real_pose.pose.position.z = msg->pose.position.z;
-      l_real_pose.pose.orientation.x = msg->pose.orientation.x;
-      l_real_pose.pose.orientation.y = msg->pose.orientation.y;
-      l_real_pose.pose.orientation.z = msg->pose.orientation.z;
-      l_real_pose.pose.orientation.w = msg->pose.orientation.w;
-      l_real_has_new_pose_ = true;
+    (void)msg;
+    if (real_has_new_pose_ == false){
+      real_has_new_pose_ = true;
 
-      // 打印接收到的信息
-      RCLCPP_INFO(this->get_logger(), "\033[1;33mTCP位姿 topic: %s\n- 位置: [x: %.3f, y: %.3f, z: %.3f]\n姿态: [qx: %.3f, qy: %.3f, qz: %.3f, qw: %.3f]\033[0m", 
-                  l_real_pose_subscriber_->get_topic_name(),
-                  l_real_pose.pose.position.x, l_real_pose.pose.position.y, l_real_pose.pose.position.z,
-                  l_real_pose.pose.orientation.x, l_real_pose.pose.orientation.y, 
-                  l_real_pose.pose.orientation.z, l_real_pose.pose.orientation.w
-      );
-    }
-  }
-
-  void rPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
-  {
-    if (r_real_has_new_pose_ == false){
-      r_real_pose.pose.position.x = msg->pose.position.x;
-      r_real_pose.pose.position.y = msg->pose.position.y;
-      r_real_pose.pose.position.z = msg->pose.position.z;
-      r_real_pose.pose.orientation.x = msg->pose.orientation.x;
-      r_real_pose.pose.orientation.y = msg->pose.orientation.y;
-      r_real_pose.pose.orientation.z = msg->pose.orientation.z;
-      r_real_pose.pose.orientation.w = msg->pose.orientation.w;
-      r_real_has_new_pose_ = true;
-
-      // 打印接收到的信息
-      RCLCPP_INFO(this->get_logger(), "\033[1;33mTCP位姿 topic: %s\n- 位置: [x: %.3f, y: %.3f, z: %.3f]\n姿态: [qx: %.3f, qy: %.3f, qz: %.3f, qw: %.3f]\033[0m", 
-                  r_real_pose_subscriber_->get_topic_name(),
-                  r_real_pose.pose.position.x, r_real_pose.pose.position.y, r_real_pose.pose.position.z,
-                  r_real_pose.pose.orientation.x, r_real_pose.pose.orientation.y, 
-                  r_real_pose.pose.orientation.z, r_real_pose.pose.orientation.w
-      );
+      // // 打印接收到的信息
+      // RCLCPP_INFO(this->get_logger(), "\033[1;33mTCP位姿 topic: %s\n- 位置: [x: %.3f, y: %.3f, z: %.3f]\n姿态: [qx: %.3f, qy: %.3f, qz: %.3f, qw: %.3f]\033[0m", 
+      //             l_real_pose_subscriber_->get_topic_name(),
+      //             l_real_pose.pose.position.x, l_real_pose.pose.position.y, l_real_pose.pose.position.z,
+      //             l_real_pose.pose.orientation.x, l_real_pose.pose.orientation.y, 
+      //             l_real_pose.pose.orientation.z, l_real_pose.pose.orientation.w
+      // );
     }
   }
 
@@ -278,7 +193,7 @@ public:
 
               if (l_ctl_init == false) {
                 // 更新真机姿态
-                l_real_has_new_pose_ = false;
+                real_has_new_pose_ = false;
                 l_ctl_init_pose.header.stamp = ps.header.stamp;
                 l_ctl_init_pose.header.frame_id = ps.header.frame_id;
                 l_ctl_init_pose.pose.position.x = ps.pose.position.x;
@@ -297,7 +212,7 @@ public:
                   ps.pose.orientation.w
                 );
               }
-              else if(l_ctl_init == true && l_real_has_new_pose_ == true) {
+              else if(l_ctl_init == true && real_has_new_pose_ == true) {
 
                 // 把控制器(右手系x右，y上，z后)里的移动和旋转，"翻译"成真实世界(右手系x前，y左，z上)里的动作
                 // 然后叠加到当前的物体位置上，最后发布这个结果result
@@ -330,19 +245,6 @@ public:
                   ps.pose.orientation.z,
                   ps.pose.orientation.w
                 );
-                
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -453,7 +355,7 @@ public:
                 result.pose.orientation.z = q_real_new.z();
                 result.pose.orientation.w = q_real_new.w();
 
-                l_joint_publisher_->publish(result);
+                // l_joint_publisher_->publish(result);
               }
             }
             else {
@@ -476,7 +378,7 @@ public:
               message.position = {gripper_value};
               message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
               message.effort = {1.0};
-              l_gripper_joint_publisher_->publish(message);
+              // l_gripper_joint_publisher_->publish(message);
               left_gripper = true;
 
               RCLCPP_INFO(this->get_logger(), "Left gripper: [%f]", gripper_value);
@@ -491,7 +393,7 @@ public:
               message.position = {gripper_value};
               message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
               message.effort = {1.0};
-              l_gripper_joint_publisher_->publish(message);
+              // l_gripper_joint_publisher_->publish(message);
               left_gripper = false;
 
               RCLCPP_INFO(this->get_logger(), "Left gripper: [%f]", gripper_value);
@@ -515,7 +417,7 @@ public:
 
               if (r_ctl_init == false) {
                 // 更新真机姿态
-                r_real_has_new_pose_ = false;
+                real_has_new_pose_ = false;
                 r_ctl_init_pose.header.stamp = ps.header.stamp;
                 r_ctl_init_pose.header.frame_id = ps.header.frame_id;
                 r_ctl_init_pose.pose.position.x = ps.pose.position.x;
@@ -534,7 +436,7 @@ public:
                   ps.pose.orientation.w
                 );
               }
-              else if(r_ctl_init == true && r_real_has_new_pose_ == true) {
+              else if(r_ctl_init == true && real_has_new_pose_ == true) {
 
                 // 把控制器(右手系x右，y上，z后)里的移动和旋转，"翻译"成真实世界(右手系x前，y左，z上)里的动作
                 // 然后叠加到当前的物体位置上，最后发布这个结果result
@@ -676,7 +578,7 @@ public:
                 result.pose.orientation.z = q_real_new.z();
                 result.pose.orientation.w = q_real_new.w();
 
-                r_joint_publisher_->publish(result);
+                // r_joint_publisher_->publish(result);
               }
             }
             else {
@@ -700,7 +602,7 @@ public:
               message.position = {gripper_value};
               message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
               message.effort = {1.0};
-              r_gripper_joint_publisher_->publish(message);
+              // r_gripper_joint_publisher_->publish(message);
               right_gripper = true;
 
               RCLCPP_INFO(this->get_logger(), "Right gripper: [%f]", gripper_value);
@@ -715,7 +617,7 @@ public:
               message.position = {gripper_value};
               message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
               message.effort = {1.0};
-              r_gripper_joint_publisher_->publish(message);
+              // r_gripper_joint_publisher_->publish(message);
               right_gripper = false;
 
               RCLCPP_INFO(this->get_logger(), "Right gripper: [%f]", gripper_value);
@@ -737,21 +639,12 @@ public:
 
 private:
   rclcpp::Publisher<xr_msgs::msg::Custom>::SharedPtr publisher_;
-  // 修改：将 pose_publisher_ 改为 l_joint_publisher_
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr l_joint_publisher_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr r_joint_publisher_;
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr l_gripper_joint_publisher_;
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_gripper_joint_publisher_;
+  rclcpp::Publisher<arm_interfaces::msg::MasterArmCommand>::SharedPtr xr_pose_publisher_;
+  // rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr r_joint_publisher_;
+  rclcpp::Subscription<arm_interfaces::msg::ArmStatus>::SharedPtr real_pose_subscriber_;
+  // rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_gripper_joint_publisher_;
 
-  // 最新左臂真机姿态和相关变量
-  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr l_real_pose_subscriber_;
-  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr r_real_pose_subscriber_;
-  bool l_real_has_new_pose_ = false;
-  bool r_real_has_new_pose_ = false;
-
-  // // 紧急停止
-  // rclcpp::Client<std_srvs::srv::Empty>::SharedPtr l_emergency_stop_client_;
-  // rclcpp::Client<std_srvs::srv::Empty>::SharedPtr r_emergency_stop_client_;
+  bool real_has_new_pose_ = false;
 
 
   bool left_gripper = false;

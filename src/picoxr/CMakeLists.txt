@@ -11,10 +11,11 @@ message(STATUS "OS_PLATFORM: ${ISA_NAME}")
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(arm_interfaces REQUIRED)
+find_package(xr_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(xr_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 set(COAL_DISABLE_HPP_FCL_WARNINGS ON)
@@ -59,6 +60,7 @@ ament_target_dependencies(pico_zme
   xr_msgs
   geometry_msgs
   tf2
+  arm_interfaces
 )
 
 if(NOT UNIX)

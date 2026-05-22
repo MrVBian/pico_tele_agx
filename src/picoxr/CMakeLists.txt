@@ -30,11 +30,6 @@ FetchContent_Declare(
   GIT_SHALLOW TRUE
   GIT_PROGRESS TRUE
 )
-# FetchContent_Declare(
-#   json
-#   URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
-#   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-# )
 FetchContent_MakeAvailable(json)
 
 add_executable(talker src/publisher.cpp)
@@ -43,6 +38,20 @@ target_compile_features(talker PUBLIC cxx_std_17)
 target_compile_definitions(talker PRIVATE COAL_DISABLE_HPP_FCL_WARNINGS)
 
 ament_target_dependencies(talker
+  rclcpp
+  std_msgs
+  std_srvs
+  sensor_msgs
+  xr_msgs
+  geometry_msgs
+  tf2
+)
+
+# pico_zme 节点
+add_executable(pico_zme src/pico_zme.cpp)
+target_compile_features(pico_zme PUBLIC cxx_std_17)
+target_compile_definitions(pico_zme PRIVATE COAL_DISABLE_HPP_FCL_WARNINGS)
+ament_target_dependencies(pico_zme
   rclcpp
   std_msgs
   std_srvs
@@ -72,10 +81,10 @@ else()
   set(PICORobotSDK_LIB_NAME PXREARobotSDK)
 endif()
 
-target_include_directories(talker PUBLIC ${PICORobotSDK_INCLUDE})
-
-target_link_directories(talker PUBLIC ${PICORobotSDK_LIB_PATH})
-
+foreach(target talker pico_zme)
+  target_include_directories(${target} PUBLIC ${PICORobotSDK_INCLUDE})
+  target_link_directories(${target} PUBLIC ${PICORobotSDK_LIB_PATH})
+endforeach()
 
 if(TARGET pinocchio::pinocchio)
   target_link_libraries(talker pinocchio::pinocchio)
@@ -85,19 +94,28 @@ elseif(DEFINED pinocchio_LIBRARIES)
   target_link_libraries(talker ${pinocchio_LIBRARIES})
 endif()
 
+
 if(TARGET Eigen3::Eigen)
-  target_link_libraries(talker Eigen3::Eigen)
+  foreach(target talker pico_zme)
+    target_link_libraries(${target} Eigen3::Eigen)
+  endforeach()
 elseif(DEFINED EIGEN3_LIBS)
-  target_link_libraries(talker ${EIGEN3_LIBS})
+  foreach(target talker pico_zme)
+    target_link_libraries(${target} ${EIGEN3_LIBS})
+  endforeach()
 endif()
 
 
-target_link_libraries(talker
-  ${PICORobotSDK_LIB_NAME}
-  nlohmann_json::nlohmann_json
+foreach(target talker pico_zme)
+  target_link_libraries(${target}
+    ${PICORobotSDK_LIB_NAME}
+    nlohmann_json::nlohmann_json
   )
+endforeach()
 
-install(TARGETS talker DESTINATION lib/${PROJECT_NAME})
+install(TARGETS talker pico_zme
+  DESTINATION lib/${PROJECT_NAME}
+)
 install(FILES ${PICORobotSDK_LIB_PATH}/lib${PICORobotSDK_LIB_NAME}.so
         DESTINATION lib)
 

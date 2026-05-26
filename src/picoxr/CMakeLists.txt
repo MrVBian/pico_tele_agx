@@ -17,17 +17,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 set(COAL_DISABLE_HPP_FCL_WARNINGS ON)
 find_package(Eigen3 REQUIRED)
-
-# nlohmann/json
-include(FetchContent)
-FetchContent_Declare(
-  json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.11.3
-  GIT_SHALLOW TRUE
-  GIT_PROGRESS TRUE
-)
-FetchContent_MakeAvailable(json)
+find_package(nlohmann_json REQUIRED)
 
 
 # pico_zme 节点
@@ -36,10 +26,10 @@ target_compile_features(pico_zme PUBLIC cxx_std_17)
 target_compile_definitions(pico_zme PRIVATE COAL_DISABLE_HPP_FCL_WARNINGS)
 ament_target_dependencies(pico_zme
   rclcpp
+  arm_interfaces
   xr_msgs
   geometry_msgs
   tf2
-  arm_interfaces
 )
 
 if(NOT UNIX)
@@ -50,7 +40,7 @@ set(ROBOT_SDK "/opt/apps/roboticsservice/SDK")
 if(EXISTS ${ROBOT_SDK})
   # message(WARNING "SDK") 
   set(PICORobotSDK_INCLUDE ${ROBOT_SDK}/include)
-  set(PICORobotSDK_LIB_PATH ${ROBOT_SDK}/linux/64)
+  set(PICORobotSDK_LIB_PATH ${ROBOT_SDK}/linux_aarch64/64)
   set(PICORobotSDK_LIB_NAME PXREARobotSDK)
 else()
   set(ROBOT_SDK "/opt/apps/picobusinesssuite/SDK/clientso/64")
@@ -82,6 +72,7 @@ endif()
 foreach(target pico_zme)
   target_link_libraries(${target}
     ${PICORobotSDK_LIB_NAME}
+    Eigen3::Eigen
     nlohmann_json::nlohmann_json
   )
 endforeach()

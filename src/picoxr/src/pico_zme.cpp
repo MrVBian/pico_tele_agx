@@ -29,8 +29,6 @@
 #include <tf2/LinearMath/Vector3.h>
 
 #include "arm_interfaces/msg/master_controller_command.hpp"
-#include "arm_interfaces/msg/arm_status.hpp"
-
 
 using namespace std::chrono_literals;
 using json = nlohmann::json;
@@ -70,27 +68,9 @@ public:
     // real
     xr_pose_publisher_ = this->create_publisher<arm_interfaces::msg::MasterControllerCommand>("/tele_vr_cmd", 10);
 
-    real_pose_subscriber_ = this->create_subscription<arm_interfaces::msg::ArmStatus>("/arm_status", 10, std::bind(&XRNode::PoseCallback, this, std::placeholders::_1));
-    void PoseCallback(const arm_interfaces::msg::ArmStatus::SharedPtr msg);
   }
 
   ~XRNode() {
-  }
-
-  void PoseCallback(const arm_interfaces::msg::ArmStatus::SharedPtr msg)
-  {
-    (void)msg;
-    if (real_has_new_pose_ == false){
-      real_has_new_pose_ = true;
-
-      // // 打印接收到的信息
-      // RCLCPP_INFO(this->get_logger(), "\033[1;33mTCP位姿 topic: %s\n- 位置: [x: %.3f, y: %.3f, z: %.3f]\n姿态: [qx: %.3f, qy: %.3f, qz: %.3f, qw: %.3f]\033[0m", 
-      //             l_real_pose_subscriber_->get_topic_name(),
-      //             l_real_pose.pose.position.x, l_real_pose.pose.position.y, l_real_pose.pose.position.z,
-      //             l_real_pose.pose.orientation.x, l_real_pose.pose.orientation.y, 
-      //             l_real_pose.pose.orientation.z, l_real_pose.pose.orientation.w
-      // );
-    }
   }
 
   // 修改回调部分：不直接求解 IK，只更新 latest target 并 notify 工作线程
@@ -326,7 +306,6 @@ private:
   rclcpp::Publisher<xr_msgs::msg::Custom>::SharedPtr publisher_;
   rclcpp::Publisher<arm_interfaces::msg::MasterControllerCommand>::SharedPtr xr_pose_publisher_;
   // rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr r_joint_publisher_;
-  rclcpp::Subscription<arm_interfaces::msg::ArmStatus>::SharedPtr real_pose_subscriber_;
   // rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_gripper_joint_publisher_;
 
   bool real_has_new_pose_ = false;

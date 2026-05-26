@@ -22,7 +22,6 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "std_msgs/msg/header.hpp"
-#include "sensor_msgs/msg/joint_state.hpp"  // 添加 JointState 头文件
 
 #include <tf2/LinearMath/Transform.h>
 #include <tf2/LinearMath/Matrix3x3.h>

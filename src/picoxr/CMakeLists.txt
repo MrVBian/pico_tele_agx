@@ -13,13 +13,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(arm_interfaces REQUIRED)
 find_package(xr_msgs REQUIRED)
-find_package(std_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
-find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 set(COAL_DISABLE_HPP_FCL_WARNINGS ON)
-find_package(pinocchio REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # nlohmann/json
@@ -33,20 +29,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
-add_executable(talker src/publisher.cpp)
-target_compile_features(talker PUBLIC cxx_std_17)
-
-target_compile_definitions(talker PRIVATE COAL_DISABLE_HPP_FCL_WARNINGS)
-
-ament_target_dependencies(talker
-  rclcpp
-  std_msgs
-  std_srvs
-  sensor_msgs
-  xr_msgs
-  geometry_msgs
-  tf2
-)
 
 # pico_zme 节点
 add_executable(pico_zme src/pico_zme.cpp)
@@ -54,9 +36,6 @@ target_compile_features(pico_zme PUBLIC cxx_std_17)
 target_compile_definitions(pico_zme PRIVATE COAL_DISABLE_HPP_FCL_WARNINGS)
 ament_target_dependencies(pico_zme
   rclcpp
-  std_msgs
-  std_srvs
-  sensor_msgs
   xr_msgs
   geometry_msgs
   tf2
@@ -83,39 +62,31 @@ else()
   set(PICORobotSDK_LIB_NAME PXREARobotSDK)
 endif()
 
-foreach(target talker pico_zme)
+foreach(target pico_zme)
   target_include_directories(${target} PUBLIC ${PICORobotSDK_INCLUDE})
   target_link_directories(${target} PUBLIC ${PICORobotSDK_LIB_PATH})
 endforeach()
 
-if(TARGET pinocchio::pinocchio)
-  target_link_libraries(talker pinocchio::pinocchio)
-elseif(TARGET pinocchio)
-  target_link_libraries(talker pinocchio)
-elseif(DEFINED pinocchio_LIBRARIES)
-  target_link_libraries(talker ${pinocchio_LIBRARIES})
-endif()
-
 
 if(TARGET Eigen3::Eigen)
-  foreach(target talker pico_zme)
+  foreach(target pico_zme)
     target_link_libraries(${target} Eigen3::Eigen)
   endforeach()
 elseif(DEFINED EIGEN3_LIBS)
-  foreach(target talker pico_zme)
+  foreach(target pico_zme)
     target_link_libraries(${target} ${EIGEN3_LIBS})
   endforeach()
 endif()
 
 
-foreach(target talker pico_zme)
+foreach(target pico_zme)
   target_link_libraries(${target}
     ${PICORobotSDK_LIB_NAME}
     nlohmann_json::nlohmann_json
   )
 endforeach()
 
-install(TARGETS talker pico_zme
+install(TARGETS pico_zme
   DESTINATION lib/${PROJECT_NAME}
 )
 install(FILES ${PICORobotSDK_LIB_PATH}/lib${PICORobotSDK_LIB_NAME}.so

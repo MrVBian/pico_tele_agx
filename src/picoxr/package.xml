@@ -8,13 +8,9 @@
   <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <depend>std_msgs</depend>
   <depend>arm_interfaces</depend>
-  <depend>std_srvs</depend>
-  <depend>sensor_msgs</depend>
   <depend>xr_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>piper</depend>
 
   <build_depend>ament_index_cpp</build_depend>
   <build_depend>rclcpp</build_depend>

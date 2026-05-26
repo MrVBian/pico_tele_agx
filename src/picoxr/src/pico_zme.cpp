@@ -179,8 +179,8 @@ public:
             //  0,  1,  0]
             tf2::Matrix3x3 rot_mat;
             rot_mat.setValue(0,  0, -1,
-                            -1, 0,  0,
-                            0,  1,  0);
+                            1, 0,  0,
+                            0,  -1,  0);
             // 构造从原始坐标系到真实世界坐标系的变换（仅旋转，无平移）
             tf2::Transform T_W_to_real;
             T_W_to_real.setBasis(rot_mat);
@@ -192,6 +192,12 @@ public:
             // 提取真实世界坐标系下的位置和四元数
             tf2::Vector3 p_real = T_ctl_real.getOrigin();
             tf2::Quaternion q_real = T_ctl_real.getRotation();
+
+
+            tf2::Matrix3x3 R_l_ctl(q_l_ctl);
+            tf2::Matrix3x3 R_l_real = rot_mat * R_l_ctl * rot_mat.transpose();
+            R_l_real.getRotation(q_real);
+            q_real.normalize();
 
             masterArmCmd.left_command.position.x = p_real.x();
             masterArmCmd.left_command.position.y = p_real.y();
@@ -225,6 +231,12 @@ public:
             // 提取真实世界坐标系下的位置和四元数
             p_real = T_ctl_real.getOrigin();
             q_real = T_ctl_real.getRotation();
+
+            tf2::Matrix3x3 R_r_ctl(q_r_ctl);
+            tf2::Matrix3x3 R_r_real = rot_mat * R_r_ctl * rot_mat.transpose();
+            R_r_real.getRotation(q_real);
+            q_real.normalize();
+
             masterArmCmd.right_command.position.x = p_real.x();
             masterArmCmd.right_command.position.y = p_real.y();
             masterArmCmd.right_command.position.z = p_real.z();
@@ -336,3 +348,4 @@ int main(int argc, char * argv[])
   rclcpp::shutdown();
   return 0;
 }
+

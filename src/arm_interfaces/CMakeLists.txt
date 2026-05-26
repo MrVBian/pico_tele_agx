@@ -32,6 +32,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/StatusStream.msg"
   "msg/ArmStatus.msg"
   "msg/JointStatus.msg"
+  "msg/MasterControllerCommand.msg"
   "msg/MasterArmCommand.msg"
   "msg/PerceptionInformation.msg"
   "msg/PerceptionTarget.msg"

@@ -24,10 +24,12 @@
 #include "std_msgs/msg/header.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"  // 添加 JointState 头文件
 
-#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Transform.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Vector3.h>
 
-#include "arm_interfaces/msg/master_arm_command.hpp"
+#include "arm_interfaces/msg/master_controller_command.hpp"
 #include "arm_interfaces/msg/arm_status.hpp"
 
 
@@ -67,7 +69,7 @@ public:
     publisher_ = this->create_publisher<xr_msgs::msg::Custom>("xr_pose", 10);
     
     // real
-    xr_pose_publisher_ = this->create_publisher<arm_interfaces::msg::MasterArmCommand>("/tele_vr_cmd", 10);
+    xr_pose_publisher_ = this->create_publisher<arm_interfaces::msg::MasterControllerCommand>("/tele_vr_cmd", 10);
 
     real_pose_subscriber_ = this->create_subscription<arm_interfaces::msg::ArmStatus>("/arm_status", 10, std::bind(&XRNode::PoseCallback, this, std::placeholders::_1));
     void PoseCallback(const arm_interfaces::msg::ArmStatus::SharedPtr msg);
@@ -175,453 +177,137 @@ public:
               custom_msg.right_controller = right_controller_msg;
             }
 
-            // // XR
+            // XR
             publisher_->publish(custom_msg);
 
-            if (custom_msg.left_controller.trigger == 1.0f) {
-              geometry_msgs::msg::PoseStamped ps;
-              ps.header.stamp = this->now();
-              ps.header.frame_id = "Pico";
 
-              ps.pose.position.x = custom_msg.left_controller.pose[0];
-              ps.pose.position.y = custom_msg.left_controller.pose[1];
-              ps.pose.position.z = custom_msg.left_controller.pose[2];
-              ps.pose.orientation.x = custom_msg.left_controller.pose[3];
-              ps.pose.orientation.y = custom_msg.left_controller.pose[4];
-              ps.pose.orientation.z = custom_msg.left_controller.pose[5];
-              ps.pose.orientation.w = custom_msg.left_controller.pose[6];
-
-              if (l_ctl_init == false) {
-                // 更新真机姿态
-                real_has_new_pose_ = false;
-                l_ctl_init_pose.header.stamp = ps.header.stamp;
-                l_ctl_init_pose.header.frame_id = ps.header.frame_id;
-                l_ctl_init_pose.pose.position.x = ps.pose.position.x;
-                l_ctl_init_pose.pose.position.y = ps.pose.position.y;
-                l_ctl_init_pose.pose.position.z = ps.pose.position.z;
-                l_ctl_init_pose.pose.orientation.x = ps.pose.orientation.x;
-                l_ctl_init_pose.pose.orientation.y = ps.pose.orientation.y;
-                l_ctl_init_pose.pose.orientation.z = ps.pose.orientation.z;
-                l_ctl_init_pose.pose.orientation.w = ps.pose.orientation.w;
-                l_ctl_init = true;
-
-                RCLCPP_INFO(this->get_logger(), 
-                  "\033[1;33m[LEFT CTRL INIT] Pose: [x:%f, y:%f, z:%f, qx:%f, qy:%f, qz:%f, qw:%f]\033[0m",
-                  ps.pose.position.x, ps.pose.position.y, ps.pose.position.z,
-                  ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z,
-                  ps.pose.orientation.w
-                );
-              }
-              else if(l_ctl_init == true && real_has_new_pose_ == true) {
-
-                // 把控制器(右手系x右，y上，z后)里的移动和旋转，"翻译"成真实世界(右手系x前，y左，z上)里的动作
-                // 然后叠加到当前的物体位置上，最后发布这个结果result
-                
-                // 1. 计算控制器相对于初始位置的位移
-                double dx_ctl = ps.pose.position.x - l_ctl_init_pose.pose.position.x;
-                double dy_ctl = ps.pose.position.y - l_ctl_init_pose.pose.position.y;
-                double dz_ctl = ps.pose.position.z - l_ctl_init_pose.pose.position.z;
-                
-                // 2. 将控制器位移转换到真实世界坐标系
-                // 控制器x+ -> 真实世界y-
-                // 控制器y+ -> 真实世界z+
-                // 控制器z+ -> 真实世界x-
-                double dx_real = -dz_ctl;  // 控制器z+ -> 真实世界x-
-                double dy_real = -dx_ctl;  // 控制器x+ -> 真实世界y-
-                double dz_real = dy_ctl;   // 控制器y+ -> 真实世界z+
-                
-                // 3. 计算旋转变换
-                // 获取控制器初始和当前的四元数
-                tf2::Quaternion q_ctl_init(
-                  l_ctl_init_pose.pose.orientation.x,
-                  l_ctl_init_pose.pose.orientation.y,
-                  l_ctl_init_pose.pose.orientation.z,
-                  l_ctl_init_pose.pose.orientation.w
-                );
-                
-                tf2::Quaternion q_ctl_current(
-                  ps.pose.orientation.x,
-                  ps.pose.orientation.y,
-                  ps.pose.orientation.z,
-                  ps.pose.orientation.w
-                );
+            auto masterArmCmd = arm_interfaces::msg::MasterControllerCommand();
+            masterArmCmd.header.stamp = rclcpp::Node::now();
 
 
 
-                // 计算相对旋转：从初始到当前的旋转
-                tf2::Quaternion q_ctl_rel = q_ctl_init.inverse() * q_ctl_current;
-                q_ctl_rel.normalize();
+            // 构造控制器在原始坐标系（与控制器坐标轴定义相同）中的变换
+            tf2::Transform T_l_ctl_W;
+            T_l_ctl_W.setOrigin(tf2::Vector3(custom_msg.left_controller.pose[0], custom_msg.left_controller.pose[1], custom_msg.left_controller.pose[2]));
+            tf2::Quaternion q_l_ctl(custom_msg.left_controller.pose[3], custom_msg.left_controller.pose[4], custom_msg.left_controller.pose[5], custom_msg.left_controller.pose[6]);
+            T_l_ctl_W.setRotation(q_l_ctl);
 
-                // 4. 将控制器坐标系的旋转转换到真实世界坐标系
-                // 使用旋转矩阵转换而不是欧拉角转换，避免万向节锁和顺序问题
-                // 定义从控制器坐标系到真实世界坐标系的旋转矩阵
-                // 根据坐标轴映射关系：控制器(x右,y上,z后) -> 真实世界(x前,y左,z上)
-                // 控制器x轴(右) -> 真实世界y轴负方向(左)
-                // 控制器y轴(上) -> 真实世界z轴(上)
-                // 控制器z轴(后) -> 真实世界x轴负方向(后)
-                tf2::Matrix3x3 R_ctl_to_real(
-                  0, 0, -1,  // 控制器x轴(1,0,0)映射到真实世界(0,0,-1) -> 但实际上是y-，见下面
-                  -1, 0, 0,  // 控制器y轴(0,1,0)映射到真实世界(-1,0,0) -> 但实际上是z+，见下面
-                  0, 1, 0   // 控制器z轴(0,0,1)映射到真实世界(0,1,0) -> 但实际上是x-，见下面
-                );
-                // 修正：上面的矩阵不对，我们需要仔细映射
-                // 实际上，控制器的基向量在真实世界中的表示为：
-                // 控制器x(1,0,0) -> 真实世界(0,-1,0) 即y-
-                // 控制器y(0,1,0) -> 真实世界(0,0,1) 即z+
-                // 控制器z(0,0,1) -> 真实世界(-1,0,0) 即x-
-                // 所以正确的旋转矩阵R_ctl_to_real为：
-                // [ 0,  0, -1 ]
-                // [-1,  0,  0 ]
-                // [ 0,  1,  0 ]
+            // 定义从原始坐标系到真实世界坐标系的旋转矩阵
+            // 根据映射关系：控制器(x右,y上,z后) -> 真实世界(x前,y左,z上)
+            // 对应的旋转矩阵为：
+            // [0,  0, -1;
+            //  -1, 0,  0;
+            //  0,  1,  0]
+            tf2::Matrix3x3 rot_mat;
+            rot_mat.setValue(0,  0, -1,
+                            -1, 0,  0,
+                            0,  1,  0);
+            // 构造从原始坐标系到真实世界坐标系的变换（仅旋转，无平移）
+            tf2::Transform T_W_to_real;
+            T_W_to_real.setBasis(rot_mat);
+            T_W_to_real.setOrigin(tf2::Vector3(0, 0, 0));
 
-                // 将控制器的相对旋转转换为旋转矩阵
-                tf2::Matrix3x3 R_ctl_rel(q_ctl_rel);
+            // 计算控制器在真实世界坐标系下的变换
+            tf2::Transform T_ctl_real = T_W_to_real * T_l_ctl_W;
 
-                // 将控制器坐标系中的旋转矩阵转换到真实世界坐标系
-                // 公式: R_real_rel = R_ctl_to_real * R_ctl_rel * R_ctl_to_real.transpose()
-                tf2::Matrix3x3 R_real_rel = R_ctl_to_real * R_ctl_rel * R_ctl_to_real.transpose();
+            // 提取真实世界坐标系下的位置和四元数
+            tf2::Vector3 p_real = T_ctl_real.getOrigin();
+            tf2::Quaternion q_real = T_ctl_real.getRotation();
 
-                // 将旋转矩阵转换回四元数
-                tf2::Quaternion q_real_rel;
-                R_real_rel.getRotation(q_real_rel);
-                q_real_rel.normalize();
+            masterArmCmd.left_command.position.x = p_real.x();
+            masterArmCmd.left_command.position.y = p_real.y();
+            masterArmCmd.left_command.position.z = p_real.z();
+            masterArmCmd.left_command.orientation.x = q_real.x();
+            masterArmCmd.left_command.orientation.y = q_real.y();
+            masterArmCmd.left_command.orientation.z = q_real.z();
+            masterArmCmd.left_command.orientation.w = q_real.w();
 
-                // 5. 叠加到当前的物体位置
-                geometry_msgs::msg::PoseStamped result;
-                result.header.stamp = this->now();
-                result.header.frame_id = "real";
-
-                // 计算新的位置
-                result.pose.position.x = l_real_pose.pose.position.x + dx_real;
-                result.pose.position.y = l_real_pose.pose.position.y + dy_real;
-                result.pose.position.z = l_real_pose.pose.position.z + dz_real;
-
-                // 计算新的方向
-                tf2::Quaternion q_real_current(
-                  l_real_pose.pose.orientation.x,
-                  l_real_pose.pose.orientation.y,
-                  l_real_pose.pose.orientation.z,
-                  l_real_pose.pose.orientation.w
-                );
-
-                // 旋转叠加：在全局坐标系中应用相对旋转
-                tf2::Quaternion q_real_new = q_real_rel * q_real_current;
-                q_real_new.normalize();
-
-                // 调试：检查旋转轴
-                // 获取四元数的旋转轴和角度
-                tf2::Vector3 axis_ctl = q_ctl_rel.getAxis();
-                double angle_ctl = q_ctl_rel.getAngle();
-
-                tf2::Vector3 axis_real = q_real_rel.getAxis();
-                double angle_real = q_real_rel.getAngle();
-
-                // 为了调试，也计算欧拉角
-                double roll_ctl, pitch_ctl, yaw_ctl;
-                tf2::Matrix3x3(q_ctl_rel).getRPY(roll_ctl, pitch_ctl, yaw_ctl);
-
-                double roll_real, pitch_real, yaw_real;
-                tf2::Matrix3x3(q_real_rel).getRPY(roll_real, pitch_real, yaw_real);
-
-                RCLCPP_INFO(this->get_logger(),
-                  "\033[1;33m[LEFT CTRL DEBUG]\033[0m\n"
-                  "┌──────────────────────────────────┬─────────────────────────────────────────────────────────┐\n"
-                  "│ Controller offset                │ dx:%9.6f  dy:%9.6f  dz:%9.6f │\n"
-                  "│ Transformed to real              │ dx:%9.6f  dy:%9.6f  dz:%9.6f │\n"
-                  "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
-                  "│ Controller RPY (rad)            │ roll:%7.4f pitch:%7.4f yaw:%7.4f │\n"
-                  "│ Real world RPY (rad)            │ roll:%7.4f pitch:%7.4f yaw:%7.4f │\n"
-                  "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
-                  "│ Controller rel rotation          │ axis:[%6.3f, %6.3f, %6.3f] angle:%6.3f │\n"
-                  "│ Real world rel rotation          │ axis:[%6.3f, %6.3f, %6.3f] angle:%6.3f │\n"
-                  "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
-                  "│ Real world current pos           │ x:%9.6f  y:%9.6f  z:%9.6f │\n"
-                  "│ Real world new pos               │ x:%9.6f  y:%9.6f  z:%9.6f │\n"
-                  "│ Real world new quat              │ x:%9.6f  y:%9.6f  z:%9.6f  w:%9.6f │\n"
-                  "└──────────────────────────────────┴─────────────────────────────────────────────────────────┘",
-                  dx_ctl, dy_ctl, dz_ctl,
-                  dx_real, dy_real, dz_real,
-                  roll_ctl, pitch_ctl, yaw_ctl,
-                  roll_real, pitch_real, yaw_real,
-                  axis_ctl.x(), axis_ctl.y(), axis_ctl.z(), angle_ctl,
-                  axis_real.x(), axis_real.y(), axis_real.z(), angle_real,
-                  l_real_pose.pose.position.x, l_real_pose.pose.position.y, l_real_pose.pose.position.z,
-                  result.pose.position.x, result.pose.position.y, result.pose.position.z,
-                  q_real_new.x(), q_real_new.y(), q_real_new.z(), q_real_new.w()
-                );
-
-                result.pose.orientation.x = q_real_new.x();
-                result.pose.orientation.y = q_real_new.y();
-                result.pose.orientation.z = q_real_new.z();
-                result.pose.orientation.w = q_real_new.w();
-
-                // l_joint_publisher_->publish(result);
-              }
+            if (custom_msg.left_controller.gripper==1.0f){
+              masterArmCmd.left_button[9] = true;
             }
-            else {
-              if (l_ctl_init) {
-                l_ctl_init = false;
-                // RCLCPP_INFO(this->get_logger(), "\033[1;31mLeft trigger released, calling emergency stop service\033[0m");
-                // auto request = std::make_shared<std_srvs::srv::Empty::Request>();
-                // l_emergency_stop_client_->async_send_request(request);
-                // RCLCPP_INFO(this->get_logger(), "\033[1;31mEmergency stop service called\033[0m");
-              }
+            else{
+              masterArmCmd.left_button[9] = false;
+            }
+            if (custom_msg.left_controller.trigger == 1.0f){
+              masterArmCmd.left_button[13] = false;
+              masterArmCmd.left_button[14] = true;
+            }
+            else{
+              masterArmCmd.left_button[13] = true;
+              masterArmCmd.left_button[14] = false;
             }
 
-            if (custom_msg.left_controller.gripper == 1.0f && left_gripper == false) {
-              auto message = sensor_msgs::msg::JointState();
-              message.header.stamp = this->now();
-              message.header.frame_id = "base_link";
-              
-              float gripper_value = 0.05f;
-              message.name = {"gripper"};
-              message.position = {gripper_value};
-              message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
-              message.effort = {1.0};
-              // l_gripper_joint_publisher_->publish(message);
-              left_gripper = true;
+            tf2::Transform T_r_ctl_W;
+            T_r_ctl_W.setOrigin(tf2::Vector3(custom_msg.right_controller.pose[0], custom_msg.right_controller.pose[1], custom_msg.right_controller.pose[2]));
+            tf2::Quaternion q_r_ctl(custom_msg.right_controller.pose[3], custom_msg.right_controller.pose[4], custom_msg.right_controller.pose[5], custom_msg.right_controller.pose[6]);
+            T_r_ctl_W.setRotation(q_r_ctl);
+            // 计算控制器在真实世界坐标系下的变换
+            T_ctl_real = T_W_to_real * T_r_ctl_W;
+            // 提取真实世界坐标系下的位置和四元数
+            p_real = T_ctl_real.getOrigin();
+            q_real = T_ctl_real.getRotation();
+            masterArmCmd.right_command.position.x = p_real.x();
+            masterArmCmd.right_command.position.y = p_real.y();
+            masterArmCmd.right_command.position.z = p_real.z();
+            masterArmCmd.right_command.orientation.x = q_real.x();
+            masterArmCmd.right_command.orientation.y = q_real.y();
+            masterArmCmd.right_command.orientation.z = q_real.z();
+            masterArmCmd.right_command.orientation.w = q_real.w();
 
-              RCLCPP_INFO(this->get_logger(), "Left gripper: [%f]", gripper_value);
+            if (custom_msg.right_controller.gripper==1.0f){
+              masterArmCmd.right_button[9] = true;
             }
-            else if (custom_msg.left_controller.gripper != 1.0f && left_gripper == true){
-              auto message = sensor_msgs::msg::JointState();
-              message.header.stamp = this->now();
-              message.header.frame_id = "base_link";
-              
-              float gripper_value = 0.0f;
-              message.name = {"gripper"};
-              message.position = {gripper_value};
-              message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
-              message.effort = {1.0};
-              // l_gripper_joint_publisher_->publish(message);
-              left_gripper = false;
-
-              RCLCPP_INFO(this->get_logger(), "Left gripper: [%f]", gripper_value);
+            else{
+              masterArmCmd.right_button[9] = false;
+            }
+            if (custom_msg.right_controller.trigger == 1.0f){
+              masterArmCmd.right_button[13] = false;
+              masterArmCmd.right_button[14] = true;
+            }
+            else{
+              masterArmCmd.right_button[13] = true;
+              masterArmCmd.right_button[14] = false;
             }
 
 
-
-
-            if (custom_msg.right_controller.trigger == 1.0f) {
-              geometry_msgs::msg::PoseStamped ps;
-              ps.header.stamp = this->now();
-              ps.header.frame_id = "Pico";
-
-              ps.pose.position.x = custom_msg.right_controller.pose[0];
-              ps.pose.position.y = custom_msg.right_controller.pose[1];
-              ps.pose.position.z = custom_msg.right_controller.pose[2];
-              ps.pose.orientation.x = custom_msg.right_controller.pose[3];
-              ps.pose.orientation.y = custom_msg.right_controller.pose[4];
-              ps.pose.orientation.z = custom_msg.right_controller.pose[5];
-              ps.pose.orientation.w = custom_msg.right_controller.pose[6];
-
-              if (r_ctl_init == false) {
-                // 更新真机姿态
-                real_has_new_pose_ = false;
-                r_ctl_init_pose.header.stamp = ps.header.stamp;
-                r_ctl_init_pose.header.frame_id = ps.header.frame_id;
-                r_ctl_init_pose.pose.position.x = ps.pose.position.x;
-                r_ctl_init_pose.pose.position.y = ps.pose.position.y;
-                r_ctl_init_pose.pose.position.z = ps.pose.position.z;
-                r_ctl_init_pose.pose.orientation.x = ps.pose.orientation.x;
-                r_ctl_init_pose.pose.orientation.y = ps.pose.orientation.y;
-                r_ctl_init_pose.pose.orientation.z = ps.pose.orientation.z;
-                r_ctl_init_pose.pose.orientation.w = ps.pose.orientation.w;
-                r_ctl_init = true;
-
-                RCLCPP_INFO(this->get_logger(), 
-                  "\033[1;33m[RIGHT CTRL INIT] Pose: [x:%f, y:%f, z:%f, qx:%f, qy:%f, qz:%f, qw:%f]\033[0m",
-                  ps.pose.position.x, ps.pose.position.y, ps.pose.position.z,
-                  ps.pose.orientation.x, ps.pose.orientation.y, ps.pose.orientation.z,
-                  ps.pose.orientation.w
-                );
-              }
-              else if(r_ctl_init == true && real_has_new_pose_ == true) {
-
-                // 把控制器(右手系x右，y上，z后)里的移动和旋转，"翻译"成真实世界(右手系x前，y左，z上)里的动作
-                // 然后叠加到当前的物体位置上，最后发布这个结果result
-                
-                // 1. 计算控制器相对于初始位置的位移
-                double dx_ctl = ps.pose.position.x - r_ctl_init_pose.pose.position.x;
-                double dy_ctl = ps.pose.position.y - r_ctl_init_pose.pose.position.y;
-                double dz_ctl = ps.pose.position.z - r_ctl_init_pose.pose.position.z;
-                
-                // 2. 将控制器位移转换到真实世界坐标系
-                // 控制器x+ -> 真实世界y-
-                // 控制器y+ -> 真实世界z+
-                // 控制器z+ -> 真实世界x-
-                double dx_real = -dz_ctl;  // 控制器z+ -> 真实世界x-
-                double dy_real = -dx_ctl;  // 控制器x+ -> 真实世界y-
-                double dz_real = dy_ctl;   // 控制器y+ -> 真实世界z+
-                
-                // 3. 计算旋转变换
-                // 获取控制器初始和当前的四元数
-                tf2::Quaternion q_ctl_init(
-                  r_ctl_init_pose.pose.orientation.x,
-                  r_ctl_init_pose.pose.orientation.y,
-                  r_ctl_init_pose.pose.orientation.z,
-                  r_ctl_init_pose.pose.orientation.w
-                );
-                
-                tf2::Quaternion q_ctl_current(
-                  ps.pose.orientation.x,
-                  ps.pose.orientation.y,
-                  ps.pose.orientation.z,
-                  ps.pose.orientation.w
-                );
-                
-
-                // 计算相对旋转：从初始到当前的旋转
-                tf2::Quaternion q_ctl_rel = q_ctl_init.inverse() * q_ctl_current;
-                q_ctl_rel.normalize();
-
-                // 4. 将控制器坐标系的旋转转换到真实世界坐标系
-                // 使用旋转矩阵转换而不是欧拉角转换，避免万向节锁和顺序问题
-                // 定义从控制器坐标系到真实世界坐标系的旋转矩阵
-                // 根据坐标轴映射关系：控制器(x右,y上,z后) -> 真实世界(x前,y左,z上)
-                // 控制器x轴(右) -> 真实世界y轴负方向(左)
-                // 控制器y轴(上) -> 真实世界z轴(上)
-                // 控制器z轴(后) -> 真实世界x轴负方向(后)
-                tf2::Matrix3x3 R_ctl_to_real(
-                  0, 0, -1,  // 控制器x轴(1,0,0)映射到真实世界(0,0,-1) -> 但实际上是y-，见下面
-                  -1, 0, 0,  // 控制器y轴(0,1,0)映射到真实世界(-1,0,0) -> 但实际上是z+，见下面
-                  0, 1, 0   // 控制器z轴(0,0,1)映射到真实世界(0,1,0) -> 但实际上是x-，见下面
-                );
-                // 修正：上面的矩阵不对，我们需要仔细映射
-                // 实际上，控制器的基向量在真实世界中的表示为：
-                // 控制器x(1,0,0) -> 真实世界(0,-1,0) 即y-
-                // 控制器y(0,1,0) -> 真实世界(0,0,1) 即z+
-                // 控制器z(0,0,1) -> 真实世界(-1,0,0) 即x-
-                // 所以正确的旋转矩阵R_ctl_to_real为：
-                // [ 0,  0, -1 ]
-                // [-1,  0,  0 ]
-                // [ 0,  1,  0 ]
-
-                // 将控制器的相对旋转转换为旋转矩阵
-                tf2::Matrix3x3 R_ctl_rel(q_ctl_rel);
-
-                // 将控制器坐标系中的旋转矩阵转换到真实世界坐标系
-                // 公式: R_real_rel = R_ctl_to_real * R_ctl_rel * R_ctl_to_real.transpose()
-                tf2::Matrix3x3 R_real_rel = R_ctl_to_real * R_ctl_rel * R_ctl_to_real.transpose();
-
-                // 将旋转矩阵转换回四元数
-                tf2::Quaternion q_real_rel;
-                R_real_rel.getRotation(q_real_rel);
-                q_real_rel.normalize();
-
-                // 5. 叠加到当前的物体位置
-                geometry_msgs::msg::PoseStamped result;
-                result.header.stamp = this->now();
-                result.header.frame_id = "real";
-
-                // 计算新的位置
-                result.pose.position.x = r_real_pose.pose.position.x + dx_real;
-                result.pose.position.y = r_real_pose.pose.position.y + dy_real;
-                result.pose.position.z = r_real_pose.pose.position.z + dz_real;
-
-                // 计算新的方向
-                tf2::Quaternion q_real_current(
-                  r_real_pose.pose.orientation.x,
-                  r_real_pose.pose.orientation.y,
-                  r_real_pose.pose.orientation.z,
-                  r_real_pose.pose.orientation.w
-                );
-
-                // 旋转叠加：在全局坐标系中应用相对旋转
-                tf2::Quaternion q_real_new = q_real_rel * q_real_current;
-                q_real_new.normalize();
-
-                // 调试：检查旋转轴
-                // 获取四元数的旋转轴和角度
-                tf2::Vector3 axis_ctl = q_ctl_rel.getAxis();
-                double angle_ctl = q_ctl_rel.getAngle();
-
-                tf2::Vector3 axis_real = q_real_rel.getAxis();
-                double angle_real = q_real_rel.getAngle();
-
-                // 为了调试，也计算欧拉角
-                double roll_ctl, pitch_ctl, yaw_ctl;
-                tf2::Matrix3x3(q_ctl_rel).getRPY(roll_ctl, pitch_ctl, yaw_ctl);
-
-                double roll_real, pitch_real, yaw_real;
-                tf2::Matrix3x3(q_real_rel).getRPY(roll_real, pitch_real, yaw_real);
-
-                RCLCPP_INFO(this->get_logger(),
-                  "\033[1;33m[RIGHT CTRL DEBUG]\033[0m\n"
-                  "┌──────────────────────────────────┬─────────────────────────────────────────────────────────┐\n"
-                  "│ Controller offset                │ dx:%9.6f  dy:%9.6f  dz:%9.6f │\n"
-                  "│ Transformed to real              │ dx:%9.6f  dy:%9.6f  dz:%9.6f │\n"
-                  "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
-                  "│ Controller RPY (rad)            │ roll:%7.4f pitch:%7.4f yaw:%7.4f │\n"
-                  "│ Real world RPY (rad)            │ roll:%7.4f pitch:%7.4f yaw:%7.4f │\n"
-                  "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
-                  "│ Controller rel rotation          │ axis:[%6.3f, %6.3f, %6.3f] angle:%6.3f │\n"
-                  "│ Real world rel rotation          │ axis:[%6.3f, %6.3f, %6.3f] angle:%6.3f │\n"
-                  "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
-                  "│ Real world current pos           │ x:%9.6f  y:%9.6f  z:%9.6f │\n"
-                  "│ Real world new pos               │ x:%9.6f  y:%9.6f  z:%9.6f │\n"
-                  "│ Real world new quat              │ x:%9.6f  y:%9.6f  z:%9.6f  w:%9.6f │\n"
-                  "└──────────────────────────────────┴─────────────────────────────────────────────────────────┘",
-                  dx_ctl, dy_ctl, dz_ctl,
-                  dx_real, dy_real, dz_real,
-                  roll_ctl, pitch_ctl, yaw_ctl,
-                  roll_real, pitch_real, yaw_real,
-                  axis_ctl.x(), axis_ctl.y(), axis_ctl.z(), angle_ctl,
-                  axis_real.x(), axis_real.y(), axis_real.z(), angle_real,
-                  r_real_pose.pose.position.x, r_real_pose.pose.position.y, r_real_pose.pose.position.z,
-                  result.pose.position.x, result.pose.position.y, result.pose.position.z,
-                  q_real_new.x(), q_real_new.y(), q_real_new.z(), q_real_new.w()
-                );
-
-                result.pose.orientation.x = q_real_new.x();
-                result.pose.orientation.y = q_real_new.y();
-                result.pose.orientation.z = q_real_new.z();
-                result.pose.orientation.w = q_real_new.w();
-
-                // r_joint_publisher_->publish(result);
-              }
+            if (custom_msg.left_controller.primary_button == true && custom_msg.right_controller.primary_button == true){
+              masterArmCmd.left_button[3] = true;
+              masterArmCmd.right_button[3] = true;
             }
-            else {
-              if (r_ctl_init) {
-                r_ctl_init = false;
-                // RCLCPP_INFO(this->get_logger(), "\033[1;31mRight trigger released, calling emergency stop service\033[0m");
-                // auto request = std::make_shared<std_srvs::srv::Empty::Request>();
-                // r_emergency_stop_client_->async_send_request(request);
-                // RCLCPP_INFO(this->get_logger(), "\033[1;31mEmergency stop service called\033[0m");
-              }
+            if (custom_msg.left_controller.secondary_button || custom_msg.right_controller.secondary_button){
+              masterArmCmd.left_button[4] = true;
+              masterArmCmd.right_button[4] = true;
             }
 
 
-            if (custom_msg.right_controller.gripper == 1.0f && right_gripper == false) {
-              auto message = sensor_msgs::msg::JointState();
-              message.header.stamp = this->now();
-              message.header.frame_id = "base_link";
-              
-              float gripper_value = 0.05f;
-              message.name = {"gripper"};
-              message.position = {gripper_value};
-              message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
-              message.effort = {1.0};
-              // r_gripper_joint_publisher_->publish(message);
-              right_gripper = true;
+            // 输出日志：记录最终发送给双臂的命令数据
+            RCLCPP_INFO(this->get_logger(),
+                "Master Arm Commands Updated:\n"
+                "Left  -> Position: [%.4f, %.4f, %.4f], Orientation: [%.4f, %.4f, %.4f, %.4f]\n"
+                "Right -> Position: [%.4f, %.4f, %.4f], Orientation: [%.4f, %.4f, %.4f, %.4f]",
+                masterArmCmd.left_command.position.x,
+                masterArmCmd.left_command.position.y,
+                masterArmCmd.left_command.position.z,
+                masterArmCmd.left_command.orientation.x,
+                masterArmCmd.left_command.orientation.y,
+                masterArmCmd.left_command.orientation.z,
+                masterArmCmd.left_command.orientation.w,
+                masterArmCmd.right_command.position.x,
+                masterArmCmd.right_command.position.y,
+                masterArmCmd.right_command.position.z,
+                masterArmCmd.right_command.orientation.x,
+                masterArmCmd.right_command.orientation.y,
+                masterArmCmd.right_command.orientation.z,
+                masterArmCmd.right_command.orientation.w
+            );
 
-              RCLCPP_INFO(this->get_logger(), "Right gripper: [%f]", gripper_value);
-            }
-            else if (custom_msg.right_controller.gripper != 1.0f && right_gripper == true){
-              auto message = sensor_msgs::msg::JointState();
-              message.header.stamp = this->now();
-              message.header.frame_id = "base_link";
-              
-              float gripper_value = 0.0f;
-              message.name = {"gripper"};
-              message.position = {gripper_value};
-              message.velocity = {0.0};  // 使用空数组会导致错误，这里设为0.0
-              message.effort = {1.0};
-              // r_gripper_joint_publisher_->publish(message);
-              right_gripper = false;
+            // std::cout << "抓握:" << (masterArmCmd.left_button[9] ? "true" : "false")
+            //   << ", 扳机:" << (masterArmCmd.left_button[14] ? "true" : "false")
+            //   << ", X&A:" << (masterArmCmd.left_button[3] ? "true" : "false")
+            //   << ", Y/B:" << (masterArmCmd.left_button[4] ? "true" : "false")
+            //   << std::endl;
 
-              RCLCPP_INFO(this->get_logger(), "Right gripper: [%f]", gripper_value);
-            }
+            xr_pose_publisher_->publish(masterArmCmd);
 
           } catch (const std::exception& e) {
             std::cerr << "Parse failed: " << e.what() << std::endl;
@@ -639,16 +325,12 @@ public:
 
 private:
   rclcpp::Publisher<xr_msgs::msg::Custom>::SharedPtr publisher_;
-  rclcpp::Publisher<arm_interfaces::msg::MasterArmCommand>::SharedPtr xr_pose_publisher_;
+  rclcpp::Publisher<arm_interfaces::msg::MasterControllerCommand>::SharedPtr xr_pose_publisher_;
   // rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr r_joint_publisher_;
   rclcpp::Subscription<arm_interfaces::msg::ArmStatus>::SharedPtr real_pose_subscriber_;
   // rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_gripper_joint_publisher_;
 
   bool real_has_new_pose_ = false;
-
-
-  bool left_gripper = false;
-  bool right_gripper = false;
 
   bool l_ctl_init = false;
   bool r_ctl_init = false;

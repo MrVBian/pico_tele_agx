@@ -21,17 +21,7 @@ find_package(tf2 REQUIRED)
 set(COAL_DISABLE_HPP_FCL_WARNINGS ON)
 find_package(pinocchio REQUIRED)
 find_package(Eigen3 REQUIRED)
-
-# nlohmann/json
-include(FetchContent)
-FetchContent_Declare(
-  json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.11.3
-  GIT_SHALLOW TRUE
-  GIT_PROGRESS TRUE
-)
-FetchContent_MakeAvailable(json)
+find_package(nlohmann_json REQUIRED)
 
 add_executable(talker src/publisher.cpp)
 target_compile_features(talker PUBLIC cxx_std_17)

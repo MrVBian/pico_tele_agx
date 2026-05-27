@@ -1,56 +1,53 @@
-cmake_minimum_required(VERSION 3.8)
-project(ik_solver)
+cmake_minimum_required(VERSION 3.22)
+project(ik_solver LANGUAGES C CXX)
 
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+SET(CMAKE_BUILD_TYPE "Release")
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
-find_package(pinocchio REQUIRED)
-find_package(Eigen3 REQUIRED)
+# 运动学与数学库
+find_package(pinocchio 3.8.0 REQUIRED)
+find_package(Eigen3 3.4 REQUIRED)
+# 新增依赖：octomap, hpp-fcl, casadi, qpOASES
+find_package(octomap REQUIRED)
+find_package(hpp-fcl REQUIRED)
 
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
-  set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
-  set(ament_cmake_cpplint_FOUND TRUE)
-  ament_lint_auto_find_test_dependencies()
-endif()
+# 查找 casadi 和 qpOASES 库
+find_library(CASADI_LIBRARY NAMES casadi PATHS /usr/local/lib /usr/lib)
+find_library(QPOASES_LIBRARY NAMES qpOASES PATHS /usr/local/lib /usr/lib)
 
 # executable
-add_executable(ik_solver_node src/main.cpp)
-target_compile_features(ik_solver_node PUBLIC cxx_std_17)
+add_executable(${PROJECT_NAME} src/main.cpp)
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
 
-# ament deps
-ament_target_dependencies(ik_solver_node
-  rclcpp
-  ament_index_cpp
+# 使用关键字签名链接所有依赖
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    rclcpp::rclcpp
+    ament_index_cpp::ament_index_cpp
+    pinocchio::pinocchio
+    ${OCTOMAP_LIBRARIES}
+    hpp-fcl::hpp-fcl
+    Eigen3::Eigen
+    ${CASADI_LIBRARY}
+    ${QPOASES_LIBRARY}
 )
 
-# link pinocchio / eigen robustly
-if(TARGET pinocchio::pinocchio)
-  target_link_libraries(ik_solver_node pinocchio::pinocchio)
-elseif(TARGET pinocchio)
-  target_link_libraries(ik_solver_node pinocchio)
-elseif(DEFINED pinocchio_LIBRARIES)
-  target_link_libraries(ik_solver_node ${pinocchio_LIBRARIES})
-endif()
-
-if(TARGET Eigen3::Eigen)
-  target_link_libraries(ik_solver_node Eigen3::Eigen)
-elseif(DEFINED EIGEN3_LIBS)
-  target_link_libraries(ik_solver_node ${EIGEN3_LIBS})
-endif()
+# include 路径
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${pinocchio_INCLUDE_DIRS}
+    ${OCTOMAP_INCLUDE_DIRS}
+    ${HPP_FCL_INCLUDE_DIRS}
+    /usr/local/include
+)
 
 # install
-install(TARGETS ik_solver_node
+install(TARGETS ${PROJECT_NAME}
   DESTINATION lib/${PROJECT_NAME}
 )
 

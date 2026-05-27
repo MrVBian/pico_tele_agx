@@ -1,156 +1,281 @@
-/**
- * @file ik_example.cpp
- * @brief 使用Pinocchio库实现逆运动学（IK）求解示例
- * 
- * 该程序通过迭代雅可比伪逆方法，计算机器人末端执行器到达目标位姿所需的关节角度。
- * 目标位姿可通过命令行参数指定，否则使用默认值。
- * 注：本示例中机器人末端执行器为"link6"。
- */
-
+#include <pinocchio/autodiff/casadi.hpp>
+#include <pinocchio/algorithm/kinematics.hpp>
+#include <pinocchio/algorithm/frames.hpp>
+#include <pinocchio/parsers/urdf.hpp>
+#include <pinocchio/spatial/log.hpp>
+#include <casadi/casadi.hpp>
+#include <chrono>
+#include <Eigen/Dense>
 #include <iostream>
-#include <iomanip>
-#include <string>
-#include <filesystem>
+#include <vector>
 
-#include "pinocchio/parsers/urdf.hpp"
-#include "pinocchio/algorithm/joint-configuration.hpp"
-#include "pinocchio/algorithm/kinematics.hpp"
-#include "pinocchio/algorithm/jacobian.hpp"
-#include "pinocchio/algorithm/frames.hpp"
-#include "pinocchio/spatial/explog.hpp"
-
-using namespace pinocchio;
-
-struct IKResult {
-  bool success;
-  Eigen::VectorXd q;
-  Eigen::VectorXd err;
-  int iterations;
-};
-
-// 封装的 IK 求解函数：传入 model、末端名称、目标位姿 oMdes、初始 q（可用 neutral(model)）
-// 返回 IKResult（包含是否收敛、最终 q、最终误差、迭代次数）
-IKResult solveIK(const Model & model,
-                 const std::string & ee_name,
-                 const SE3 & oMdes,
-                 const Eigen::VectorXd & q_init,
-                 double eps = 1e-4,
-                 int IT_MAX = 1000,
-                 double DT = 1e-1,
-                 double damp = 1e-6)
+std::vector<double> DMToStdVector(const casadi::DM& dm)
 {
-  IKResult res;
-  res.success = false;
-  res.iterations = 0;
-
-  // 查找末端帧
-  FrameIndex ee_frame = FrameIndex(-1);
-  for (FrameIndex i = 0; i < static_cast<FrameIndex>(model.nframes); ++i) {
-    if (model.frames[i].name == ee_name) { ee_frame = i; break; }
-  }
-  if (ee_frame == FrameIndex(-1)) {
-    res.err = Eigen::VectorXd::Zero(6);
-    return res;
-  }
-  const JointIndex JOINT_ID = model.frames[ee_frame].parent;
-
-  Data data(model);
-  Eigen::VectorXd q = q_init;
-  typedef Eigen::Matrix<double,6,1> Vector6d;
-  Vector6d err = Vector6d::Zero();
-
-  Data::Matrix6x J(6, model.nv); J.setZero();
-
-  for (int iter = 0; ; ++iter) {
-    forwardKinematics(model, data, q);
-    const SE3 iMd = data.oMi[JOINT_ID].actInv(oMdes);
-    err = log6(iMd).toVector();
-    const double err_norm = err.norm();
-
-    if (err_norm < eps) {
-      res.success = true;
-      res.iterations = iter;
-      break;
-    }
-    if (iter >= IT_MAX) {
-      res.success = false;
-      res.iterations = iter;
-      break;
-    }
-
-    computeJointJacobian(model, data, q, JOINT_ID, J);
-
-    Data::Matrix6 Jlog; Jlog.setZero();
-    Jlog6(iMd.inverse(), Jlog);
-    J = -Jlog * J;
-
-    Data::Matrix6 JJt;
-    JJt.noalias() = J * J.transpose();
-    JJt.diagonal().array() += damp;
-    Eigen::VectorXd v(model.nv);
-    v.noalias() = -J.transpose() * JJt.ldlt().solve(err);
-
-    q = integrate(model, q, v * DT);
-
-    if ((iter % 10) == 0) {
-      std::cout << "iter " << iter << " err_norm=" << err_norm << std::endl;
-    }
-  }
-
-  res.q = q;
-  res.err = err;
-  return res;
+    std::vector<double> v(dm.size1());
+    for (int i = 0; i < dm.size1(); ++i)
+        v[i] = static_cast<double>(dm(i));
+    return v;
 }
 
-int main(int argc, char ** argv)
+casadi::DM matrix_to_dm(const Eigen::Matrix4d& matrix)
 {
-  namespace fs = std::filesystem;
-  using namespace pinocchio;
+    casadi::DM ret = casadi::DM::eye(4);
+    for(int i = 0; i < 4; i++){
+        for(int j = 0; j < 4; j++){
+            ret(i,j) = matrix(i,j);
+        }
+    }
+    return ret;
+}
 
-  // 1. 检查URDF文件路径并加载模型
-  const std::string urdf_filename = "/projects/xr/agx_arm_ws/src/piper/urdf/piper_description.urdf";
-  if (!fs::exists(urdf_filename)) {
-    std::cerr << "URDF not found: " << urdf_filename << std::endl;
-    return 1;
-  }
-  std::cout << "Using URDF: " << urdf_filename << std::endl;
+int main()
+{
+    using Scalar   = double;
+    using ADScalar = casadi::SX;
 
-  try {
-    // 2. 从URDF文件构建机器人模型
+    using Model   = pinocchio::ModelTpl<Scalar>;
+    using Data    = pinocchio::DataTpl<Scalar>;
+
+    using ADModel = pinocchio::ModelTpl<ADScalar>;
+    using ADData  = pinocchio::DataTpl<ADScalar>;
+
+    // =========================================================
+    // 1. 构建 Pinocchio 模型（URDF）- 单臂七轴
+    // =========================================================
     Model model;
-    pinocchio::urdf::buildModel(urdf_filename, model);
-    Data data(model);
-    std::cout << "Model name: " << model.name << " nq=" << model.nq << " nv=" << model.nv << std::endl;
+    std::string urdf_path = "/projects/pico_tele_agx/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/nero/urdf/nero_description.urdf";  
+    pinocchio::urdf::buildModel(urdf_path, model);
+    std::cout << "Model loaded. nq = " << model.nq
+                << ", nv = " << model.nv << std::endl;
+    
+    // 选择末端 frame（单臂七轴，末端为joint7）
+    std::string ee_frame_name = "joint7"; 
+    pinocchio::FrameIndex ee_id = model.getFrameId(ee_frame_name);
+    std::cout << "End-effector frame: " << ee_frame_name << " (id: " << ee_id << ")" << std::endl;
+    
+    // =========================================================
+    // 2. Cast 为 CasADi 符号模型
+    // =========================================================
+    ADModel ad_model = model.cast<ADScalar>();
+    ADData  ad_data(ad_model);
 
-    // 设置期望位姿（示例：可从命令行读取）
-    double tx=1.0, ty=0.0, tz=1.0;
-    double qx=0.0, qy=0.0, qz=0.0, qw=1.0;
-    if (argc >= 8) {
-      tx = std::stod(argv[1]); ty = std::stod(argv[2]); tz = std::stod(argv[3]);
-      qx = std::stod(argv[4]); qy = std::stod(argv[5]); qz = std::stod(argv[6]); qw = std::stod(argv[7]);
+    // =========================================================
+    // 3. 定义 CasADi 符号关节变量 q
+    // =========================================================
+    casadi::SX q_sym = casadi::SX::sym("q", model.nq);
+    casadi::SX Tf_sym = casadi::SX::sym("tf", 4, 4);  // 单臂目标位姿
+    
+    ADModel::ConfigVectorType q_ad(model.nq);
+    pinocchio::casadi::copy(q_sym, q_ad);
+    
+    // =========================================================
+    // 4. 符号前向运动学
+    // =========================================================
+    pinocchio::forwardKinematics(ad_model, ad_data, q_ad);
+    pinocchio::updateFramePlacements(ad_model, ad_data);
+
+    // 获取末端位姿（单臂）
+    pinocchio::FrameIndex hand_id = ad_model.getFrameId(ee_frame_name);
+    
+    // 构建平移误差函数
+    auto tcol = [](const casadi::SX& T4x4){
+        return T4x4(casadi::Slice(0,3), casadi::Slice(3,4));  // 3x1
+    };
+
+    auto eig3_to_sx = [](const Eigen::Matrix<casadi::SX,3,1>& v){
+        casadi::SX out(3,1);
+        for(int i=0;i<3;++i) out(i) = v(i);
+        return out;
+    };
+
+    // 平移误差
+    casadi::SX p = eig3_to_sx(ad_data.oMf[hand_id].translation());
+    casadi::SX p_err = p - tcol(Tf_sym);
+    casadi::SX translational_error_expr = p_err;
+    
+    casadi::Function translational_error(
+        "translational_error",
+        {q_sym, Tf_sym},
+        {translational_error_expr}
+    );
+
+    // ===========================================================
+    // 构建旋转误差（SO(3) 对数映射形式）
+    // ===========================================================
+    const Eigen::Matrix<casadi::SX,3,3>& R = ad_data.oMf[hand_id].rotation();
+    
+    // 期望旋转矩阵
+    Eigen::Matrix<casadi::SX,3,3> R_des;
+    for(int i = 0; i < 3; ++i) {
+        for(int j = 0; j < 3; ++j) {
+            R_des(i,j) = Tf_sym(i,j);
+        }
     }
-    Eigen::Quaterniond quat(qw, qx, qy, qz); quat.normalize();
-    SE3 oMdes(quat.toRotationMatrix(), Eigen::Vector3d(tx, ty, tz));
-    const std::string ee_name = "link6";
 
-    // 调用封装的 IK 求解函数（使用 neutral 作为初始 q）
-    Eigen::VectorXd q_init = neutral(model);
-    IKResult result = solveIK(model, ee_name, oMdes, q_init);
+    Eigen::Matrix<casadi::SX,3,3> Rerr = R_des.transpose() * R;
+    Eigen::Matrix<casadi::SX,3,3> skew = 0.5 * (Rerr - Rerr.transpose());
+    Eigen::Matrix<casadi::SX,3,1> rot_err;
+    rot_err << skew(2,1), skew(0,2), skew(1,0);
+    
+    casadi::SX rot_err_sx = casadi::SX::vertcat({
+        rot_err(0), rot_err(1), rot_err(2)
+    });
+    
+    casadi::Function rotational_error(
+        "rotational_error",
+        {q_sym, Tf_sym},
+        {rot_err_sx}
+    );
 
-    if (result.success) {
-      std::cout << "IK Converged in " << result.iterations << " iterations.\n";
-      std::cout << "result q: " << result.q.transpose() << std::endl;
-      std::cout << "final error: " << result.err.transpose() << std::endl;
-    } else {
-      std::cout << "IK failed (iterations=" << result.iterations << ").\n";
-      std::cout << "last q: " << result.q.transpose() << std::endl;
-      std::cout << "last error: " << result.err.transpose() << std::endl;
+    // =========================================================
+    // 定义优化问题（单臂）
+    // =========================================================
+    casadi::Opti opti;
+    casadi::MX var_q = opti.variable(model.nq);
+    casadi::MX var_q_last = opti.parameter(model.nq);      // 上一时刻关节角
+    casadi::MX param_tf = opti.parameter(4, 4);           // 目标位姿
+    casadi::MX q_ref = opti.parameter(model.nq);          // 参考关节角（用于特定关节）
+    casadi::MX joint_w = opti.parameter(model.nq);        // 关节权重
+    
+    // 平移误差 cost
+    casadi::MXVector out1 = translational_error(casadi::MXVector{var_q, param_tf});
+    casadi::MX translational_cost = casadi::MX::sumsqr(out1.at(0));
+    
+    // 旋转误差 cost
+    casadi::MXVector out2 = rotational_error(casadi::MXVector{var_q, param_tf});
+    casadi::MX rotational_cost = casadi::MX::sumsqr(out2.at(0));
+    
+    // 正则化 cost（关节角尽量小）
+    casadi::MX regularization_cost = casadi::MX::sumsqr(var_q);
+    
+    // 平滑 cost（与上一时刻解接近）
+    casadi::MX smooth_cost = casadi::MX::sumsqr(var_q - var_q_last);
+    
+    // 特定关节目标 / 加权跟踪
+    casadi::MX joint_i_cost = casadi::MX::sumsqr(casadi::MX::diag(joint_w) * (var_q - q_ref));
+
+    // 约束：关节限位
+    Eigen::VectorXd q_min = model.lowerPositionLimit;
+    Eigen::VectorXd q_max = model.upperPositionLimit;
+    casadi::DM q_min_dm(q_min.size(), 1);
+    casadi::DM q_max_dm(q_max.size(), 1);
+    for (int i = 0; i < q_min.size(); ++i) {
+        q_min_dm(i) = q_min(i);
+        q_max_dm(i) = q_max(i);
+    }
+    opti.subject_to(opti.bounded(q_min_dm, var_q, q_max_dm));
+
+    // 最小化代价函数（调整权重）
+    opti.minimize(
+        50.0 * translational_cost 
+        + rotational_cost    // 旋转误差权重
+        + 0.04 * smooth_cost
+        + 0.06 * joint_i_cost
+        // + 0.01 * regularization_cost  // 可选：正则化
+    );
+    
+    // 求解器配置
+    casadi::Dict opts;
+    opts["expand"] = true;
+    opts["detect_simple_bounds"] = true;
+    opts["calc_lam_p"] = false;
+    opts["print_time"] = false;
+    opts["ipopt.sb"] = "yes";
+    opts["ipopt.print_level"] = 0;
+    opts["ipopt.max_iter"] = 30; 
+    opts["ipopt.tol"] = 1e-4;
+    opts["ipopt.acceptable_tol"] = 5e-4;
+    opts["ipopt.acceptable_iter"] = 5;
+    opts["ipopt.max_wall_time"] = 1e-2; // 限时10ms完成求解
+    opts["ipopt.warm_start_init_point"] = "yes";
+    opts["ipopt.derivative_test"] = "none";
+    opts["ipopt.jacobian_approximation"] = "exact";
+    
+    opti.solver("ipopt", opts);
+
+    // 设置参考关节角和权重（根据实际机器人调整）
+    std::vector<double> ref_j(model.nq, 0.0);  // 零位作为参考
+    casadi::DM ref_data = casadi::DM::zeros(model.nq, 1);
+    for (int i = 0; i < model.nq; ++i) ref_data(i) = ref_j[i];
+    opti.set_value(q_ref, ref_data);
+
+    std::vector<double> w_j(model.nq, 1.0);  // 所有权重为1
+    casadi::DM w_data = casadi::DM::zeros(model.nq, 1);
+    for (int i = 0; i < model.nq; ++i) w_data(i) = w_j[i];
+    opti.set_value(joint_w, w_data);
+
+    // =========================================================
+    // 测试：给定目标位姿求逆解
+    // =========================================================
+    
+    // 初始关节角猜测（可根据实际情况调整）
+    std::vector<double> start_j(model.nq, 0.0);
+    // 或者设置一些合理的初始值，例如：
+    // start_j = {0.0, -0.5, 0.0, -1.0, 0.0, 0.5, 0.0};  // 示例值，需根据实际机器人调整
+    
+    casadi::DM init_data = casadi::DM::zeros(model.nq, 1);
+    for (int i = 0; i < model.nq; ++i) init_data(i) = start_j[i];
+
+    // 目标位姿（示例：单位矩阵，表示原点处无旋转）
+    Eigen::Matrix4d target_pose = Eigen::Matrix4d::Identity();
+    // 设置一个具体的目标位姿，例如：
+    target_pose << 1, 0, 0, 0.5,   // x平移0.5m
+                  0, 1, 0, 0.0,   // y平移0.0m
+                  0, 0, 1, 0.3,   // z平移0.3m
+                  0, 0, 0, 1;
+    
+    casadi::DM Tf_dm = matrix_to_dm(target_pose);
+
+    // 设置优化问题参数
+    opti.set_initial(var_q, init_data);
+    opti.set_value(param_tf, Tf_dm);
+    opti.set_value(var_q_last, init_data);
+
+    // 求解
+    std::cout << "\nSolving inverse kinematics..." << std::endl;
+    auto t_start = std::chrono::high_resolution_clock::now();
+    
+    try {
+        casadi::OptiSol sol = opti.solve();
+        auto t_end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start);
+        
+        std::cout << "Solve time: " << duration.count() << " us" << std::endl;
+        std::cout << "IPOPT iterations: " << sol.stats()["iter_count"] << std::endl;
+        
+        casadi::DM q_sol = sol.value(var_q);
+        auto q_vec = DMToStdVector(q_sol);
+        
+        std::cout << "\nSolution joint angles (rad):" << std::endl;
+        for (size_t i = 0; i < q_vec.size(); ++i) {
+            std::cout << "q" << i << ": " << q_vec[i] << std::endl;
+        }
+        
+        // // 计算误差
+        // casadi::DM terr = translational_error(casadi::DMVector{q_sol, Tf_dm})[0];
+        // casadi::DM rerr = rotational_error(casadi::DMVector{q_sol, Tf_dm})[0];
+        
+        // std::cout << "\nTranslational error (x,y,z): " << terr << std::endl;
+        // std::cout << "Rotational error (rx,ry,rz): " << rerr << std::endl;
+        
+        // // 验证正运动学
+        // Model model_verify;
+        // pinocchio::urdf::buildModel(urdf_path, model_verify);
+        // Data data_verify(model_verify);
+        // Eigen::VectorXd q_verify(model_verify.nq);
+        // for (int i = 0; i < model_verify.nq; ++i) q_verify(i) = q_vec[i];
+        
+        // pinocchio::forwardKinematics(model_verify, data_verify, q_verify);
+        // pinocchio::updateFramePlacements(model_verify, data_verify);
+        
+        // std::cout << "\nVerified end-effector pose:" << std::endl;
+        // std::cout << data_verify.oMf[ee_id].translation().transpose() << std::endl;
+        // std::cout << data_verify.oMf[ee_id].rotation() << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
     }
 
-  } catch (const std::exception & e) {
-    std::cerr << "Exception: " << e.what() << std::endl;
-    return 1;
-  }
-
-  return 0;
+    return 0;
 }

@@ -7,14 +7,14 @@ from launch.actions import SetEnvironmentVariable
 
 
 def generate_launch_description():
-    robot_name_in_model = 'piper'
+    robot_name_in_model = 'nero'
     package_name = 'agx_arm_description'
-    urdf_name = "piper_description.urdf"
+    urdf_name = "nero_description.urdf"
 
     ld = LaunchDescription()
     pkg_share = FindPackageShare(package=package_name).find(package_name) 
     share_path = os.path.dirname(pkg_share)
-    urdf_model_path = os.path.join(pkg_share, f'agx_arm_urdf/piper/urdf/{urdf_name}')
+    urdf_model_path = os.path.join(pkg_share, f'agx_arm_urdf/nero/urdf/{urdf_name}')
 
     # Rviz
     # sudo apt install ros-$ROS_DISTRO-joint-state-publisher-gui ros-$ROS_DISTRO-robot-state-publisher

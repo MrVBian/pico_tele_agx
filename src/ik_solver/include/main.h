@@ -96,38 +96,53 @@ public:
 
     void lPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void rPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
-    void publishJointState(const Eigen::VectorXd& q);
+    void publishJointState(const Eigen::VectorXd& q, bool is_left);
+    void publishGripperState(double gripper_value, bool is_left);
     void OnPXREAClientCallback(void* context, PXREAClientCallbackType type, int status, void* userData);
 
 private:
     rclcpp::Publisher<xr_msgs::msg::Custom>::SharedPtr publisher_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr l_joint_publisher_;
-    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr r_joint_publisher_;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_joint_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr l_gripper_joint_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_gripper_joint_publisher_;
+    bool left_gripper = false;
+    bool right_gripper = false;
+    bool l_ctl_init = false;
+    bool r_ctl_init = false;
+    // 关节消息模板
+    sensor_msgs::msg::JointState l_gripper_msg_;
+    sensor_msgs::msg::JointState r_gripper_msg_;
+    double gripper_open_angle_ = 0.07f;;
 
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr l_real_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr r_real_pose_subscriber_;
     bool l_real_has_new_pose_ = false;
     bool r_real_has_new_pose_ = false;
-
-    rclcpp::Client<std_srvs::srv::Empty>::SharedPtr l_emergency_stop_client_;
-    rclcpp::Client<std_srvs::srv::Empty>::SharedPtr r_emergency_stop_client_;
-
-    bool left_gripper = false;
-    bool right_gripper = false;
-
-    bool l_ctl_init = false;
-    bool r_ctl_init = false;
     geometry_msgs::msg::PoseStamped l_ctl_init_pose;
     geometry_msgs::msg::PoseStamped l_real_pose;
     geometry_msgs::msg::PoseStamped r_ctl_init_pose;
     geometry_msgs::msg::PoseStamped r_real_pose;
-    
-    // IK 求解器相关
-    std::shared_ptr<IKSolver> ik_solver_;
-    Eigen::VectorXd last_q_;
-    sensor_msgs::msg::JointState joint_msg_;
+
+    rclcpp::Client<std_srvs::srv::Empty>::SharedPtr l_emergency_stop_client_;
+    rclcpp::Client<std_srvs::srv::Empty>::SharedPtr r_emergency_stop_client_;
+
+
+    // IK 求解器相关 - 左右臂独立
+    std::shared_ptr<IKSolver> ik_solver_left_;
+    std::shared_ptr<IKSolver> ik_solver_right_;
+    // 左右臂独立的状态变量
+    Eigen::VectorXd last_q_left_;
+    Eigen::VectorXd last_q_right_;
+    bool is_first_valid_ik_left_ = true;
+    bool is_first_valid_ik_right_ = true;
+    // 关节消息模板
+    sensor_msgs::msg::JointState l_joint_msg_;
+    sensor_msgs::msg::JointState r_joint_msg_;
+    // 跳变检测
+    double joint_change_threshold_ = 0.5; // 跳变阈值（弧度），根据实际机械臂调整
+    // 跳变检测函数：如果变化过大返回 true
+    bool isJointJump(const Eigen::VectorXd& q_new, const Eigen::VectorXd& q_old, bool is_left);
 };
 
 #endif // MAIN_H

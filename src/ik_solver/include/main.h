@@ -96,6 +96,8 @@ public:
 
     void lPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void rPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    void lJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
+    void rJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
     void publishJointState(const Eigen::VectorXd& q, bool is_left);
     void publishGripperState(double gripper_value, bool is_left);
     void OnPXREAClientCallback(void* context, PXREAClientCallbackType type, int status, void* userData);
@@ -117,11 +119,15 @@ private:
 
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr l_real_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr r_real_pose_subscriber_;
-    bool l_real_has_new_pose_ = false;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr l_real_joint_subscriber_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr r_real_joint_subscriber_;
+    bool l_real_has_new_joint_ = false; // 获取机器人关节
+    bool r_real_has_new_joint_ = false;
+    bool l_real_has_new_pose_ = false;  // 获取机器人姿态
     bool r_real_has_new_pose_ = false;
-    geometry_msgs::msg::PoseStamped l_ctl_init_pose;
-    geometry_msgs::msg::PoseStamped l_real_pose;
+    geometry_msgs::msg::PoseStamped l_ctl_init_pose;    // 手柄初始姿态
     geometry_msgs::msg::PoseStamped r_ctl_init_pose;
+    geometry_msgs::msg::PoseStamped l_real_pose;        // 机器人姿态
     geometry_msgs::msg::PoseStamped r_real_pose;
 
     rclcpp::Client<std_srvs::srv::Empty>::SharedPtr l_emergency_stop_client_;

@@ -718,14 +718,16 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
             }
 
             if (custom_msg.left_controller.trigger == 1.0f && left_gripper == false) {
+                double val = 0.0f;
                 publishGripperState(gripper_open_angle_, true);
                 left_gripper = true;
                 RCLCPP_INFO(this->get_logger(), "%s Left gripper: [%f]", l_gripper_joint_publisher_->get_topic_name(), gripper_open_angle_);
             }
             else if (custom_msg.left_controller.trigger != 1.0f && left_gripper == true) {
-                publishGripperState(0.0f, true);
+                double val = gripper_open_angle_;
+                publishGripperState(val, true);
                 left_gripper = false;
-                RCLCPP_INFO(this->get_logger(), "%s Left gripper: [%f]", l_gripper_joint_publisher_->get_topic_name(), 0.0f);
+                RCLCPP_INFO(this->get_logger(), "%s Left gripper: [%f]", l_gripper_joint_publisher_->get_topic_name(), val);
             }
 
 
@@ -917,14 +919,16 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
             }
 
             if (custom_msg.right_controller.trigger == 1.0f && right_gripper == false) {
-                publishGripperState(gripper_open_angle_, false);
+                double val = 0.0f;
+                publishGripperState(val, false);
                 right_gripper = true;
-                RCLCPP_INFO(this->get_logger(), "%s Right gripper: [%f]", r_gripper_joint_publisher_->get_topic_name(), gripper_open_angle_);
+                RCLCPP_INFO(this->get_logger(), "%s Right gripper: [%f]", r_gripper_joint_publisher_->get_topic_name(), val);
             }
             else if (custom_msg.right_controller.trigger != 1.0f && right_gripper == true) {
-                publishGripperState(0.0f, false);
+                double val = gripper_open_angle_;
+                publishGripperState(val, false);
                 right_gripper = false;
-                RCLCPP_INFO(this->get_logger(), "%s Right gripper: [%f]", r_gripper_joint_publisher_->get_topic_name(), 0.0f);
+                RCLCPP_INFO(this->get_logger(), "%s Right gripper: [%f]", r_gripper_joint_publisher_->get_topic_name(), val);
             }
 
         } catch (const std::exception& e) {

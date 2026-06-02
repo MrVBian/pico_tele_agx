@@ -108,8 +108,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_joint_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr l_gripper_joint_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_gripper_joint_publisher_;
-    bool left_gripper = false;
-    bool right_gripper = false;
+    bool left_gripper = true;   // 默认开
+    bool right_gripper = true;  // 默认开
     bool l_ctl_init = false;
     bool r_ctl_init = false;
     // 关节消息模板

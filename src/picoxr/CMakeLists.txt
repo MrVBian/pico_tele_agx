@@ -11,6 +11,7 @@ message(STATUS "OS_PLATFORM: ${ISA_NAME}")
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(arm_interfaces REQUIRED)
 find_package(xr_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -26,6 +27,7 @@ target_compile_features(pico_zme PUBLIC cxx_std_17)
 target_compile_definitions(pico_zme PRIVATE COAL_DISABLE_HPP_FCL_WARNINGS)
 ament_target_dependencies(pico_zme
   rclcpp
+  rclcpp_action
   arm_interfaces
   xr_msgs
   geometry_msgs
@@ -40,7 +42,8 @@ set(ROBOT_SDK "/opt/apps/roboticsservice/SDK")
 if(EXISTS ${ROBOT_SDK})
   # message(WARNING "SDK") 
   set(PICORobotSDK_INCLUDE ${ROBOT_SDK}/include)
-  set(PICORobotSDK_LIB_PATH ${ROBOT_SDK}/linux_aarch64/64)
+  set(PICORobotSDK_LIB_PATH ${ROBOT_SDK}/linux/64)
+  # set(PICORobotSDK_LIB_PATH ${ROBOT_SDK}/linux_aarch64/64)
   set(PICORobotSDK_LIB_NAME PXREARobotSDK)
 else()
   set(ROBOT_SDK "/opt/apps/picobusinesssuite/SDK/clientso/64")

@@ -18,10 +18,11 @@
 
 #include "PXREARobotSDK.h"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/string.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 
-#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/header.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 #include <tf2/LinearMath/Transform.h>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -29,6 +30,10 @@
 #include <tf2/LinearMath/Vector3.h>
 
 #include "arm_interfaces/msg/master_controller_command.hpp"
+#include "arm_interfaces/action/arm_task.hpp"
+#include "arm_interfaces/srv/enable_arm_mode.hpp"
+
+
 
 using namespace std::chrono_literals;
 using json = nlohmann::json;
@@ -64,13 +69,93 @@ public:
   XRNode() : Node("xr_publisher")
   {
     publisher_ = this->create_publisher<xr_msgs::msg::Custom>("xr_pose", 10);
-    
-    // real
     xr_pose_publisher_ = this->create_publisher<arm_interfaces::msg::MasterControllerCommand>("/tele_vr_cmd", 10);
+    enable_arm_client_ = this->create_client<arm_interfaces::srv::EnableArmMode>("/arm_enable_servo");
+    action_client_ = rclcpp_action::create_client<arm_interfaces::action::ArmTask>(this, "/action_manager");
 
+    // 初始化按钮状态
+    left_secondary_pressed_ = false;
+    right_secondary_pressed_ = false;
+    left_extend_sent_ = false;
+    right_retract_sent_ = false;
   }
 
   ~XRNode() {
+  }
+
+  // 调用使能机械臂服务
+  bool enableArmServo(bool enable) {
+    auto request = std::make_shared<arm_interfaces::srv::EnableArmMode::Request>();
+    request->enable = enable;
+    
+    // 等待服务可用
+    while (!enable_arm_client_->wait_for_service(1s)) {
+      if (!rclcpp::ok()) {
+        RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for service.");
+        return false;
+      }
+      RCLCPP_INFO(this->get_logger(), "Service not available, waiting...");
+      return false;
+    }
+    
+    // 异步调用服务
+    auto result = enable_arm_client_->async_send_request(request);
+    
+    // 可选：等待结果（如果需要同步调用）
+    if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
+        rclcpp::FutureReturnCode::SUCCESS) {
+      RCLCPP_INFO(this->get_logger(), "Service call succeeded: %s", 
+                  result.get()->message.c_str());
+      return true;
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "Service call failed");
+      return false;
+    }
+  }
+
+  // 发送伸臂任务 (task_id: 0)
+  void send_extend_arm_goal()
+  {
+    send_arm_task(0);
+  }
+
+  // 发送收臂任务 (task_id: 10)
+  void send_retract_arm_goal()
+  {
+    send_arm_task(10);
+  }
+
+  void send_arm_task(int task_id)
+  {
+    // 等待 Action Server 启动（最多等 5 秒）
+    if (!action_client_->wait_for_action_server(5s)) {
+      RCLCPP_ERROR(this->get_logger(), "Action server /action_manager not available!");
+      return;
+    }
+
+    // 创建 Goal
+    auto goal = arm_interfaces::action::ArmTask::Goal();
+    goal.task_id = task_id;
+
+    RCLCPP_INFO(this->get_logger(), "Sending arm_interfaces::action::ArmTask goal: task_id=%d", task_id);
+
+    // 设置回调函数（可选，去掉也不会报错）
+    auto options = typename rclcpp_action::Client<arm_interfaces::action::ArmTask>::SendGoalOptions();
+    
+    // 结果回调 - 使用最简单的 lambda
+    options.result_callback = [this](const rclcpp_action::ClientGoalHandle<arm_interfaces::action::ArmTask>::WrappedResult & result) {
+      if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+        RCLCPP_INFO(this->get_logger(), "ArmTask SUCCEEDED: success=%d, task_id=%d, result='%s'",
+                   result.result->success,
+                   result.result->task_id,
+                   result.result->result.c_str());
+      } else {
+        RCLCPP_WARN(this->get_logger(), "arm_interfaces::action::ArmTask FAILED or CANCELED");
+      }
+    };
+
+    // 发送目标
+    action_client_->async_send_goal(goal, options);
   }
 
   // 修改回调部分：不直接求解 IK，只更新 latest target 并 notify 工作线程
@@ -163,45 +248,21 @@ public:
             auto masterArmCmd = arm_interfaces::msg::MasterControllerCommand();
             masterArmCmd.header.stamp = rclcpp::Node::now();
 
-
-
-            // 构造控制器在原始坐标系（与控制器坐标轴定义相同）中的变换
-            tf2::Transform T_l_ctl_W;
-            T_l_ctl_W.setOrigin(tf2::Vector3(custom_msg.left_controller.pose[0], custom_msg.left_controller.pose[1], custom_msg.left_controller.pose[2]));
-            tf2::Quaternion q_l_ctl(custom_msg.left_controller.pose[3], custom_msg.left_controller.pose[4], custom_msg.left_controller.pose[5], custom_msg.left_controller.pose[6]);
-            T_l_ctl_W.setRotation(q_l_ctl);
-
-            // 定义从原始坐标系到真实世界坐标系的旋转矩阵
-            // 根据映射关系：控制器(x右,y上,z后) -> 真实世界(x前,y左,z上)
-            // 对应的旋转矩阵为：
-            // [0,  0, -1;
-            //  -1, 0,  0;
-            //  0,  1,  0]
             tf2::Matrix3x3 rot_mat;
             rot_mat.setValue(0,  0, -1,
                             1, 0,  0,
                             0,  -1,  0);
-            // 构造从原始坐标系到真实世界坐标系的变换（仅旋转，无平移）
-            tf2::Transform T_W_to_real;
-            T_W_to_real.setBasis(rot_mat);
-            T_W_to_real.setOrigin(tf2::Vector3(0, 0, 0));
 
-            // 计算控制器在真实世界坐标系下的变换
-            tf2::Transform T_ctl_real = T_W_to_real * T_l_ctl_W;
-
-            // 提取真实世界坐标系下的位置和四元数
-            tf2::Vector3 p_real = T_ctl_real.getOrigin();
-            tf2::Quaternion q_real = T_ctl_real.getRotation();
-
-
+            tf2::Quaternion q_l_ctl(custom_msg.left_controller.pose[3], custom_msg.left_controller.pose[4], custom_msg.left_controller.pose[5], custom_msg.left_controller.pose[6]);
             tf2::Matrix3x3 R_l_ctl(q_l_ctl);
             tf2::Matrix3x3 R_l_real = rot_mat * R_l_ctl * rot_mat.transpose();
+            tf2::Quaternion q_real;
             R_l_real.getRotation(q_real);
             q_real.normalize();
 
-            masterArmCmd.left_command.position.x = p_real.x();
-            masterArmCmd.left_command.position.y = p_real.y();
-            masterArmCmd.left_command.position.z = p_real.z();
+            masterArmCmd.left_command.position.x = -custom_msg.left_controller.pose[2];
+            masterArmCmd.left_command.position.y = -custom_msg.left_controller.pose[0];
+            masterArmCmd.left_command.position.z = custom_msg.left_controller.pose[1];
             masterArmCmd.left_command.orientation.x = q_real.x();
             masterArmCmd.left_command.orientation.y = q_real.y();
             masterArmCmd.left_command.orientation.z = q_real.z();
@@ -222,24 +283,15 @@ public:
               masterArmCmd.left_button[14] = false;
             }
 
-            tf2::Transform T_r_ctl_W;
-            T_r_ctl_W.setOrigin(tf2::Vector3(custom_msg.right_controller.pose[0], custom_msg.right_controller.pose[1], custom_msg.right_controller.pose[2]));
             tf2::Quaternion q_r_ctl(custom_msg.right_controller.pose[3], custom_msg.right_controller.pose[4], custom_msg.right_controller.pose[5], custom_msg.right_controller.pose[6]);
-            T_r_ctl_W.setRotation(q_r_ctl);
-            // 计算控制器在真实世界坐标系下的变换
-            T_ctl_real = T_W_to_real * T_r_ctl_W;
-            // 提取真实世界坐标系下的位置和四元数
-            p_real = T_ctl_real.getOrigin();
-            q_real = T_ctl_real.getRotation();
-
             tf2::Matrix3x3 R_r_ctl(q_r_ctl);
             tf2::Matrix3x3 R_r_real = rot_mat * R_r_ctl * rot_mat.transpose();
             R_r_real.getRotation(q_real);
             q_real.normalize();
 
-            masterArmCmd.right_command.position.x = p_real.x();
-            masterArmCmd.right_command.position.y = p_real.y();
-            masterArmCmd.right_command.position.z = p_real.z();
+            masterArmCmd.right_command.position.x = -custom_msg.right_controller.pose[2];
+            masterArmCmd.right_command.position.y = -custom_msg.right_controller.pose[0];
+            masterArmCmd.right_command.position.z = custom_msg.right_controller.pose[1];
             masterArmCmd.right_command.orientation.x = q_real.x();
             masterArmCmd.right_command.orientation.y = q_real.y();
             masterArmCmd.right_command.orientation.z = q_real.z();
@@ -261,36 +313,132 @@ public:
             }
 
 
+            // X & A 切模式
             if (custom_msg.left_controller.primary_button == true && custom_msg.right_controller.primary_button == true){
               masterArmCmd.left_button[3] = true;
               masterArmCmd.right_button[3] = true;
             }
+            // Y | B
             if (custom_msg.left_controller.secondary_button || custom_msg.right_controller.secondary_button){
               masterArmCmd.left_button[4] = true;
               masterArmCmd.right_button[4] = true;
             }
 
 
-            // 输出日志：记录最终发送给双臂的命令数据
-            RCLCPP_INFO(this->get_logger(),
-                "Master Arm Commands Updated:\n"
-                "Left  -> Position: [%.4f, %.4f, %.4f], Orientation: [%.4f, %.4f, %.4f, %.4f]\n"
-                "Right -> Position: [%.4f, %.4f, %.4f], Orientation: [%.4f, %.4f, %.4f, %.4f]",
-                masterArmCmd.left_command.position.x,
-                masterArmCmd.left_command.position.y,
-                masterArmCmd.left_command.position.z,
-                masterArmCmd.left_command.orientation.x,
-                masterArmCmd.left_command.orientation.y,
-                masterArmCmd.left_command.orientation.z,
-                masterArmCmd.left_command.orientation.w,
-                masterArmCmd.right_command.position.x,
-                masterArmCmd.right_command.position.y,
-                masterArmCmd.right_command.position.z,
-                masterArmCmd.right_command.orientation.x,
-                masterArmCmd.right_command.orientation.y,
-                masterArmCmd.right_command.orientation.z,
-                masterArmCmd.right_command.orientation.w
-            );
+
+            // ==== 长按检测逻辑 ====
+            auto current_time = std::chrono::steady_clock::now();
+
+            // 使能 Y & B 使能
+            if (custom_msg.left_controller.secondary_button && custom_msg.right_controller.secondary_button) {
+              if (!dual_secondary_pressed_) {
+                dual_secondary_pressed_ = true;
+                dual_secondary_press_start_ = current_time;
+                dual_enable_sent_ = false;  // 重置发送标志
+                // RCLCPP_INFO(this->get_logger(), "Dual secondary button pressed, starting timer...");
+              } else {
+                // 按钮持续按住，检查是否超过pressed_time秒
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                    current_time - dual_secondary_press_start_).count();
+
+                if (duration >= pressed_time && !dual_enable_sent_) {
+                  // 长按超过pressed_time秒且未发送过，执行使能任务
+                  RCLCPP_INFO(this->get_logger(), 
+                      "Dual secondary button held for %ld seconds, sending enable goal", 
+                      duration);
+                  enableArmServo(true);
+                  dual_enable_sent_ = true;  // 标记已发送，防止重复发送
+                }
+              }
+            } else {
+              // 按钮未被按下，重置状态
+              if (dual_secondary_pressed_) {
+                // RCLCPP_INFO(this->get_logger(), "Dual secondary button released");
+              }
+              dual_secondary_pressed_ = false;
+              dual_enable_sent_ = false;
+            }
+
+            // 伸臂
+            if (custom_msg.left_controller.secondary_button && !custom_msg.right_controller.secondary_button) {
+              if (!left_secondary_pressed_) {
+                left_secondary_pressed_ = true;
+                left_secondary_press_start_ = current_time;
+                left_extend_sent_ = false;  // 重置发送标志
+                // RCLCPP_INFO(this->get_logger(), "Left secondary button pressed, starting timer...");
+              } else {
+                // 按钮持续按住，检查是否超过pressed_time秒
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                    current_time - left_secondary_press_start_).count();
+                
+                if (duration >= pressed_time && !left_extend_sent_) {
+                  // 长按超过pressed_time秒且未发送过，执行伸臂任务
+                  RCLCPP_INFO(this->get_logger(), 
+                      "Left secondary button held for %ld seconds, sending extend arm goal", 
+                      duration);
+                  send_extend_arm_goal();
+                  left_extend_sent_ = true;  // 标记已发送，防止重复发送
+                }
+              }
+            } else {
+              // 按钮未被按下，重置状态
+              if (left_secondary_pressed_) {
+                // RCLCPP_INFO(this->get_logger(), "Left secondary button released");
+              }
+              left_secondary_pressed_ = false;
+              left_extend_sent_ = false;
+            }
+
+            // 收臂
+            if (custom_msg.right_controller.secondary_button && !custom_msg.left_controller.secondary_button) {
+              if (!right_secondary_pressed_) {
+                right_secondary_pressed_ = true;
+                right_secondary_press_start_ = current_time;
+                right_retract_sent_ = false;  // 重置发送标志
+                // RCLCPP_INFO(this->get_logger(), "Right secondary button pressed, starting timer...");
+              } else {
+                // 按钮持续按住，检查是否超过pressed_time秒
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                    current_time - right_secondary_press_start_).count();
+                
+                if (duration >= pressed_time && !right_retract_sent_) {
+                  // 长按超过pressed_time秒且未发送过，执行收臂任务
+                  RCLCPP_INFO(this->get_logger(), 
+                      "Right secondary button held for %ld seconds, sending retract arm goal", 
+                      duration);
+                  send_retract_arm_goal();
+                  right_retract_sent_ = true;  // 标记已发送，防止重复发送
+                }
+              }
+            } else {
+              // 按钮未被按下，重置状态
+              if (right_secondary_pressed_) {
+                // RCLCPP_INFO(this->get_logger(), "Right secondary button released");
+              }
+              right_secondary_pressed_ = false;
+              right_retract_sent_ = false;
+            }
+
+            // // 输出日志：记录最终发送给双臂的命令数据
+            // RCLCPP_INFO(this->get_logger(),
+            //     "Master Arm Commands Updated:\n"
+            //     "Left  -> Position: [%.4f, %.4f, %.4f], Orientation: [%.4f, %.4f, %.4f, %.4f]\n"
+            //     "Right -> Position: [%.4f, %.4f, %.4f], Orientation: [%.4f, %.4f, %.4f, %.4f]",
+            //     masterArmCmd.left_command.position.x,
+            //     masterArmCmd.left_command.position.y,
+            //     masterArmCmd.left_command.position.z,
+            //     masterArmCmd.left_command.orientation.x,
+            //     masterArmCmd.left_command.orientation.y,
+            //     masterArmCmd.left_command.orientation.z,
+            //     masterArmCmd.left_command.orientation.w,
+            //     masterArmCmd.right_command.position.x,
+            //     masterArmCmd.right_command.position.y,
+            //     masterArmCmd.right_command.position.z,
+            //     masterArmCmd.right_command.orientation.x,
+            //     masterArmCmd.right_command.orientation.y,
+            //     masterArmCmd.right_command.orientation.z,
+            //     masterArmCmd.right_command.orientation.w
+            // );
 
             // std::cout << "抓握:" << (masterArmCmd.left_button[9] ? "true" : "false")
             //   << ", 扳机:" << (masterArmCmd.left_button[14] ? "true" : "false")
@@ -317,8 +465,8 @@ public:
 private:
   rclcpp::Publisher<xr_msgs::msg::Custom>::SharedPtr publisher_;
   rclcpp::Publisher<arm_interfaces::msg::MasterControllerCommand>::SharedPtr xr_pose_publisher_;
-  // rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr r_joint_publisher_;
-  // rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_gripper_joint_publisher_;
+  rclcpp::Client<arm_interfaces::srv::EnableArmMode>::SharedPtr enable_arm_client_;
+  rclcpp_action::Client<arm_interfaces::action::ArmTask>::SharedPtr action_client_;
 
   bool real_has_new_pose_ = false;
 
@@ -328,6 +476,22 @@ private:
   geometry_msgs::msg::PoseStamped l_real_pose;
   geometry_msgs::msg::PoseStamped r_ctl_init_pose;
   geometry_msgs::msg::PoseStamped r_real_pose;
+
+  // ==== 长按检测相关变量 ====
+  int pressed_time = 3;
+  bool left_secondary_pressed_;
+  bool right_secondary_pressed_;
+  bool dual_secondary_pressed_;
+  bool left_extend_sent_;
+  bool right_retract_sent_;
+  bool dual_enable_sent_;
+  std::chrono::steady_clock::time_point left_secondary_press_start_;
+  std::chrono::steady_clock::time_point right_secondary_press_start_;
+  std::chrono::steady_clock::time_point dual_secondary_press_start_;
+
+  // 使能状态
+  bool is_arm_enabled_ = false;
+  bool is_arm_enabled_flag_ = false; // 避免反复发送使能信号
 };
 
 

@@ -488,10 +488,6 @@ private:
   std::chrono::steady_clock::time_point left_secondary_press_start_;
   std::chrono::steady_clock::time_point right_secondary_press_start_;
   std::chrono::steady_clock::time_point dual_secondary_press_start_;
-
-  // 使能状态
-  bool is_arm_enabled_ = false;
-  bool is_arm_enabled_flag_ = false; // 避免反复发送使能信号
 };
 
 

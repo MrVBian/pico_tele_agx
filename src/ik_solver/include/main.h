@@ -27,8 +27,7 @@
 #include "std_msgs/msg/header.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_srvs/srv/empty.hpp"
-
-#include <filesystem>
+#include "std_srvs/srv/set_bool.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -99,6 +98,9 @@ public:
     void lJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
     void rJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
     void publishJointState(const Eigen::VectorXd& q, bool is_left);
+    void SendExtendArmGoal();
+    void SendRetractArmGoal();
+    void EnableAgxArm(bool enable);
     void publishGripperState(double gripper_value, bool is_left);
     void OnPXREAClientCallback(void* context, PXREAClientCallbackType type, int status, void* userData);
 
@@ -132,6 +134,8 @@ private:
 
     rclcpp::Client<std_srvs::srv::Empty>::SharedPtr l_emergency_stop_client_;
     rclcpp::Client<std_srvs::srv::Empty>::SharedPtr r_emergency_stop_client_;
+    rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr l_enable_agx_arm_client_;
+    rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr r_enable_agx_arm_client_;
 
 
     // IK 求解器相关 - 左右臂独立
@@ -149,6 +153,19 @@ private:
     double joint_change_threshold_ = 0.5; // 跳变阈值（弧度），根据实际机械臂调整
     // 跳变检测函数：如果变化过大返回 true
     bool isJointJump(const Eigen::VectorXd& q_new, const Eigen::VectorXd& q_old, bool is_left);
+
+
+    // ==== 长按检测相关变量 ====
+    int pressed_time = 3;
+    bool left_secondary_pressed_;
+    bool right_secondary_pressed_;
+    bool dual_secondary_pressed_;
+    bool left_extend_sent_;
+    bool right_retract_sent_;
+    bool dual_enable_sent_;
+    std::chrono::steady_clock::time_point left_secondary_press_start_;
+    std::chrono::steady_clock::time_point right_secondary_press_start_;
+    std::chrono::steady_clock::time_point dual_secondary_press_start_;
 };
 
 #endif // MAIN_H

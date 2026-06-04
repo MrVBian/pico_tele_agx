@@ -71,22 +71,23 @@ public:
     publisher_ = this->create_publisher<xr_msgs::msg::Custom>("xr_pose", 10);
     xr_pose_publisher_ = this->create_publisher<arm_interfaces::msg::MasterControllerCommand>("/tele_vr_cmd", 10);
     enable_arm_client_ = this->create_client<arm_interfaces::srv::EnableArmMode>("/arm_enable_servo");
+    arm_enable_compliance_client_ = this->create_client<arm_interfaces::srv::EnableArmMode>("/arm_enable_compliance");
     action_client_ = rclcpp_action::create_client<arm_interfaces::action::ArmTask>(this, "/action_manager");
 
     // 初始化按钮状态
-    left_secondary_pressed_ = false;
-    right_secondary_pressed_ = false;
-    dual_secondary_pressed_ = false;
-    left_extend_sent_ = false;
-    right_retract_sent_ = false;
-    dual_enable_sent_ = false;
+    left_primary_pressed_ = left_secondary_pressed_ = false;
+    right_primary_pressed_ = right_secondary_pressed_ = false;
+    dual_primary_pressed_ = dual_secondary_pressed_ = false;
+    left_primary_press_sent_ = left_secondary_press_sent_ = false;
+    right_primary_press_sent_ = right_secondary_press_sent_ = false;
+    dual_primary_press_sent_ = dual_secondary_press_sent_ = false;
   }
 
   ~XRNode() {
   }
 
-  // 调用使能机械臂服务
-  bool enableArmServo(bool enable) {
+  // 使能机械臂服务
+  bool EnableArmServo(bool enable) {
     auto request = std::make_shared<arm_interfaces::srv::EnableArmMode::Request>();
     request->enable = enable;
     
@@ -114,15 +115,51 @@ public:
       return false;
     }
   }
-
-  // 发送伸臂任务 (task_id: 0)
-  void send_extend_arm_goal()
-  {
-    send_arm_task(0);
+  // 开启力控服务
+  bool EnableArmCompliance(bool enable) {
+    auto request = std::make_shared<arm_interfaces::srv::EnableArmMode::Request>();
+    request->enable = enable;
+    
+    // 等待服务可用
+    while (!arm_enable_compliance_client_->wait_for_service(1s)) {
+      if (!rclcpp::ok()) {
+        RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for service.");
+        return false;
+      }
+      RCLCPP_INFO(this->get_logger(), "Service not available, waiting...");
+      return false;
+    }
+    
+    // 异步调用服务
+    auto result = arm_enable_compliance_client_->async_send_request(request);
+    
+    // 可选：等待结果（如果需要同步调用）
+    if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
+        rclcpp::FutureReturnCode::SUCCESS) {
+      RCLCPP_INFO(this->get_logger(), "Service call succeeded: %s", 
+                  result.get()->message.c_str());
+      return true;
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "Service call failed");
+      return false;
+    }
   }
 
-  // 发送收臂任务 (task_id: 10)
-  void send_retract_arm_goal()
+  // 发送双臂伸臂任务 (task_id: 1)
+  void SendExtendArmGoal()
+  {
+    send_arm_task(1);
+  }
+  void SendLResetArmGoal()
+  {
+    send_arm_task(100);
+  }
+  void SendRResetArmGoal()
+  {
+    send_arm_task(200);
+  }
+  // 发送双臂收臂
+  void SendRetractArmGoal()
   {
     send_arm_task(10);
   }
@@ -315,41 +352,128 @@ public:
             }
 
 
-            // X & A 切模式
-            if (custom_msg.left_controller.primary_button == true && custom_msg.right_controller.primary_button == true){
-              masterArmCmd.left_button[3] = true;
-              masterArmCmd.right_button[3] = true;
-            }
-            // Y | B
-            if (custom_msg.left_controller.secondary_button || custom_msg.right_controller.secondary_button){
-              masterArmCmd.left_button[4] = true;
-              masterArmCmd.right_button[4] = true;
-            }
-
+            // // Y & B 切模式
+            // if (custom_msg.left_controller.secondary_button == true && custom_msg.right_controller.secondary_button == true){
+            //   masterArmCmd.left_button[3] = true;
+            //   masterArmCmd.right_button[3] = true;
+            // }
+            // // X | A
+            // if (custom_msg.left_controller.primary_button || custom_msg.right_controller.primary_button){
+            //   masterArmCmd.left_button[4] = true;
+            //   masterArmCmd.right_button[4] = true;
+            // }
 
 
             // ==== 长按检测逻辑 ====
             auto current_time = std::chrono::steady_clock::now();
 
-            // 使能 Y & B 使能
+            // 长按 X & A 双臂伸臂
+            if (custom_msg.left_controller.primary_button && custom_msg.right_controller.primary_button) {
+              if (!dual_primary_pressed_) {
+                dual_primary_pressed_ = true;
+                dual_primary_press_start_ = current_time;
+                dual_primary_press_sent_ = false;  // 重置发送标志
+                // RCLCPP_INFO(this->get_logger(), "Dual primary button pressed, starting timer...");
+              } else {
+                // 按钮持续按住，检查是否超过pressed_time秒
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                    current_time - dual_primary_press_start_).count();
+
+                if (duration >= pressed_time && !dual_primary_press_sent_) {
+                  RCLCPP_INFO(this->get_logger(), 
+                      "Dual primary button held for %ld seconds, sending goal", 
+                      duration);
+                  dual_primary_press_sent_ = true;  // 标记已发送，防止重复发送
+                  SendExtendArmGoal();
+                }
+              }
+            } else {
+              // 按钮未被按下，重置状态
+              if (dual_primary_pressed_) {
+                // RCLCPP_INFO(this->get_logger(), "Dual secondary button released");
+              }
+              dual_primary_pressed_ = false;
+              dual_primary_press_sent_ = false;
+            }
+
+            // 左复位
+            if (custom_msg.left_controller.primary_button && !custom_msg.right_controller.primary_button) {
+              if (!left_primary_pressed_) {
+                left_primary_pressed_ = true;
+                left_primary_press_start_ = current_time;
+                left_primary_press_sent_ = false;  // 重置发送标志
+                // RCLCPP_INFO(this->get_logger(), "Left primary button pressed, starting timer...");
+              } else {
+                // 按钮持续按住，检查是否超过pressed_time秒
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                    current_time - left_primary_press_start_).count();
+                
+                if (duration >= pressed_time && !left_primary_press_sent_) {
+                  // 长按超过pressed_time秒且未发送过，执行伸臂任务
+                  RCLCPP_INFO(this->get_logger(), 
+                      "Left primary button held for %ld seconds, sending goal", 
+                      duration);
+                  left_primary_press_sent_ = true;  // 标记已发送，防止重复发送
+                  SendLResetArmGoal();
+                }
+              }
+            } else {
+              // 按钮未被按下，重置状态
+              if (left_primary_pressed_) {
+                // RCLCPP_INFO(this->get_logger(), "Left primary button released");
+              }
+              left_primary_pressed_ = false;
+              left_primary_press_sent_ = false;
+            }
+
+            // 右复位
+            if (custom_msg.right_controller.primary_button && !custom_msg.left_controller.primary_button) {
+              if (!right_primary_pressed_) {
+                right_primary_pressed_ = true;
+                right_primary_press_start_ = current_time;
+                right_primary_press_sent_ = false;  // 重置发送标志
+                // RCLCPP_INFO(this->get_logger(), "Right primary button pressed, starting timer...");
+              } else {
+                // 按钮持续按住，检查是否超过pressed_time秒
+                auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                    current_time - right_primary_press_start_).count();
+                
+                if (duration >= pressed_time && !right_primary_press_sent_) {
+                  // 长按超过pressed_time秒且未发送过，执行收臂任务
+                  RCLCPP_INFO(this->get_logger(), 
+                      "Right primary button held for %ld seconds, sending goal", 
+                      duration);
+                  right_primary_press_sent_ = true;  // 标记已发送，防止重复发送
+                  SendRResetArmGoal();
+                }
+              }
+            } else {
+              // 按钮未被按下，重置状态
+              if (right_primary_pressed_) {
+                // RCLCPP_INFO(this->get_logger(), "Right primary button released");
+              }
+              right_primary_pressed_ = false;
+              right_primary_press_sent_ = false;
+            }
+
+
+            // 长按 Y & B 使能
             if (custom_msg.left_controller.secondary_button && custom_msg.right_controller.secondary_button) {
               if (!dual_secondary_pressed_) {
                 dual_secondary_pressed_ = true;
                 dual_secondary_press_start_ = current_time;
-                dual_enable_sent_ = false;  // 重置发送标志
+                dual_secondary_press_sent_ = false;  // 重置发送标志
                 // RCLCPP_INFO(this->get_logger(), "Dual secondary button pressed, starting timer...");
               } else {
-                // 按钮持续按住，检查是否超过pressed_time秒
                 auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                     current_time - dual_secondary_press_start_).count();
 
-                if (duration >= pressed_time && !dual_enable_sent_) {
-                  // 长按超过pressed_time秒且未发送过，执行使能任务
+                if (duration >= pressed_time && !dual_secondary_press_sent_) {
                   RCLCPP_INFO(this->get_logger(), 
-                      "Dual secondary button held for %ld seconds, sending enable goal", 
+                      "Dual secondary button held for %ld seconds, sending goal", 
                       duration);
-                  enableArmServo(true);
-                  dual_enable_sent_ = true;  // 标记已发送，防止重复发送
+                  dual_secondary_press_sent_ = true;  // 标记已发送，防止重复发送
+                  EnableArmServo(true);
                 }
               }
             } else {
@@ -358,28 +482,28 @@ public:
                 // RCLCPP_INFO(this->get_logger(), "Dual secondary button released");
               }
               dual_secondary_pressed_ = false;
-              dual_enable_sent_ = false;
+              dual_secondary_press_sent_ = false;
             }
 
-            // 伸臂
+            // Y 双臂收臂
             if (custom_msg.left_controller.secondary_button && !custom_msg.right_controller.secondary_button) {
               if (!left_secondary_pressed_) {
                 left_secondary_pressed_ = true;
                 left_secondary_press_start_ = current_time;
-                left_extend_sent_ = false;  // 重置发送标志
+                left_secondary_press_sent_ = false;  // 重置发送标志
                 // RCLCPP_INFO(this->get_logger(), "Left secondary button pressed, starting timer...");
               } else {
                 // 按钮持续按住，检查是否超过pressed_time秒
                 auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                     current_time - left_secondary_press_start_).count();
                 
-                if (duration >= pressed_time && !left_extend_sent_) {
+                if (duration >= pressed_time && !left_secondary_press_sent_) {
                   // 长按超过pressed_time秒且未发送过，执行伸臂任务
                   RCLCPP_INFO(this->get_logger(), 
-                      "Left secondary button held for %ld seconds, sending extend arm goal", 
+                      "Left secondary button held for %ld seconds, sending goal", 
                       duration);
-                  send_extend_arm_goal();
-                  left_extend_sent_ = true;  // 标记已发送，防止重复发送
+                  left_secondary_press_sent_ = true;  // 标记已发送，防止重复发送
+                  SendRetractArmGoal();
                 }
               }
             } else {
@@ -388,28 +512,28 @@ public:
                 // RCLCPP_INFO(this->get_logger(), "Left secondary button released");
               }
               left_secondary_pressed_ = false;
-              left_extend_sent_ = false;
+              left_secondary_press_sent_ = false;
             }
 
-            // 收臂
+            // B 开启力控
             if (custom_msg.right_controller.secondary_button && !custom_msg.left_controller.secondary_button) {
               if (!right_secondary_pressed_) {
                 right_secondary_pressed_ = true;
                 right_secondary_press_start_ = current_time;
-                right_retract_sent_ = false;  // 重置发送标志
+                right_secondary_press_sent_ = false;  // 重置发送标志
                 // RCLCPP_INFO(this->get_logger(), "Right secondary button pressed, starting timer...");
               } else {
                 // 按钮持续按住，检查是否超过pressed_time秒
                 auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                     current_time - right_secondary_press_start_).count();
                 
-                if (duration >= pressed_time && !right_retract_sent_) {
+                if (duration >= pressed_time && !right_secondary_press_sent_) {
                   // 长按超过pressed_time秒且未发送过，执行收臂任务
                   RCLCPP_INFO(this->get_logger(), 
-                      "Right secondary button held for %ld seconds, sending retract arm goal", 
+                      "Right secondary button held for %ld seconds, sending goal", 
                       duration);
-                  send_retract_arm_goal();
-                  right_retract_sent_ = true;  // 标记已发送，防止重复发送
+                  right_secondary_press_sent_ = true;  // 标记已发送，防止重复发送
+                  EnableArmCompliance(true);
                 }
               }
             } else {
@@ -418,7 +542,7 @@ public:
                 // RCLCPP_INFO(this->get_logger(), "Right secondary button released");
               }
               right_secondary_pressed_ = false;
-              right_retract_sent_ = false;
+              right_secondary_press_sent_ = false;
             }
 
             // // 输出日志：记录最终发送给双臂的命令数据
@@ -468,6 +592,7 @@ private:
   rclcpp::Publisher<xr_msgs::msg::Custom>::SharedPtr publisher_;
   rclcpp::Publisher<arm_interfaces::msg::MasterControllerCommand>::SharedPtr xr_pose_publisher_;
   rclcpp::Client<arm_interfaces::srv::EnableArmMode>::SharedPtr enable_arm_client_;
+  rclcpp::Client<arm_interfaces::srv::EnableArmMode>::SharedPtr arm_enable_compliance_client_;
   rclcpp_action::Client<arm_interfaces::action::ArmTask>::SharedPtr action_client_;
 
   bool real_has_new_pose_ = false;
@@ -480,13 +605,22 @@ private:
   geometry_msgs::msg::PoseStamped r_real_pose;
 
   // ==== 长按检测相关变量 ====
-  int pressed_time = 3;
+  int pressed_time = 1;
+  bool left_primary_pressed_;
+  bool right_primary_pressed_;
+  bool dual_primary_pressed_;
+  bool left_primary_press_sent_;
+  bool right_primary_press_sent_;
+  bool dual_primary_press_sent_;
   bool left_secondary_pressed_;
   bool right_secondary_pressed_;
   bool dual_secondary_pressed_;
-  bool left_extend_sent_;
-  bool right_retract_sent_;
-  bool dual_enable_sent_;
+  bool left_secondary_press_sent_;
+  bool right_secondary_press_sent_;
+  bool dual_secondary_press_sent_;
+  std::chrono::steady_clock::time_point left_primary_press_start_;
+  std::chrono::steady_clock::time_point right_primary_press_start_;
+  std::chrono::steady_clock::time_point dual_primary_press_start_;
   std::chrono::steady_clock::time_point left_secondary_press_start_;
   std::chrono::steady_clock::time_point right_secondary_press_start_;
   std::chrono::steady_clock::time_point dual_secondary_press_start_;

@@ -76,8 +76,10 @@ public:
     // 初始化按钮状态
     left_secondary_pressed_ = false;
     right_secondary_pressed_ = false;
+    dual_secondary_pressed_ = false;
     left_extend_sent_ = false;
     right_retract_sent_ = false;
+    dual_enable_sent_ = false;
   }
 
   ~XRNode() {

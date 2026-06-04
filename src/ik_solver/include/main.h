@@ -98,9 +98,12 @@ public:
     void lJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
     void rJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
     void publishJointState(const Eigen::VectorXd& q, bool is_left);
+    void SendLResetArmGoal();
+    void SendRResetArmGoal();
     void SendExtendArmGoal();
     void SendRetractArmGoal();
-    void EnableAgxArm(bool enable);
+    void EnableArmServo(bool enable);
+    // void EnableArmCompliance(bool enable);
     void publishGripperState(double gripper_value, bool is_left);
     void OnPXREAClientCallback(void* context, PXREAClientCallbackType type, int status, void* userData);
 
@@ -156,13 +159,22 @@ private:
 
 
     // ==== 长按检测相关变量 ====
-    int pressed_time = 2;
+    int pressed_time = 1;
+    bool left_primary_pressed_;
+    bool right_primary_pressed_;
+    bool dual_primary_pressed_;
+    bool left_primary_press_sent_;
+    bool right_primary_press_sent_;
+    bool dual_primary_press_sent_;
     bool left_secondary_pressed_;
     bool right_secondary_pressed_;
     bool dual_secondary_pressed_;
-    bool left_extend_sent_;
-    bool right_retract_sent_;
-    bool dual_enable_sent_;
+    bool left_secondary_press_sent_;
+    bool right_secondary_press_sent_;
+    bool dual_secondary_press_sent_;
+    std::chrono::steady_clock::time_point left_primary_press_start_;
+    std::chrono::steady_clock::time_point right_primary_press_start_;
+    std::chrono::steady_clock::time_point dual_primary_press_start_;
     std::chrono::steady_clock::time_point left_secondary_press_start_;
     std::chrono::steady_clock::time_point right_secondary_press_start_;
     std::chrono::steady_clock::time_point dual_secondary_press_start_;

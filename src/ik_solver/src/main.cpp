@@ -324,12 +324,12 @@ XRNode::XRNode() : Node("pico") {
     r_gripper_msg_.effort.clear();
 
     // 初始化按钮状态
-    left_secondary_pressed_ = false;
-    right_secondary_pressed_ = false;
-    dual_secondary_pressed_ = false;
-    left_extend_sent_ = false;
-    right_retract_sent_ = false;
-    dual_enable_sent_ = false;
+    left_primary_pressed_ = left_secondary_pressed_ = false;
+    right_primary_pressed_ = right_secondary_pressed_ = false;
+    dual_primary_pressed_ = dual_secondary_pressed_ = false;
+    left_primary_press_sent_ = left_secondary_press_sent_ = false;
+    right_primary_press_sent_ = right_secondary_press_sent_ = false;
+    dual_primary_press_sent_ = dual_secondary_press_sent_ = false;
 }
 
 XRNode::~XRNode() {}
@@ -445,6 +445,16 @@ void XRNode::publishJointState(const Eigen::VectorXd& q, bool is_left) {
         r_joint_publisher_->publish(r_joint_msg_);
     }
 }
+void XRNode::SendLResetArmGoal() {
+    l_joint_msg_.header.stamp = this->now();
+    l_joint_msg_.position = {0.0, 0.0, 0.0, 1.5707, 0.0, 0, 1.5707};
+    l_joint_publisher_->publish(l_joint_msg_);
+}
+void XRNode::SendRResetArmGoal() {
+    r_joint_msg_.header.stamp = this->now();
+    r_joint_msg_.position = {0.0, 0.0, 0.0, 1.5707, 0.0, 0, 1.5707};
+    r_joint_publisher_->publish(r_joint_msg_);
+}
 void XRNode::SendExtendArmGoal() {
     Eigen::VectorXd q_solution;
     q_solution << 0.0, 0.0, 0.0, 1.5707, 0.0, 0.0, 1.5707;
@@ -452,12 +462,14 @@ void XRNode::SendExtendArmGoal() {
     publishJointState(q_solution, false);
 }
 void XRNode::SendRetractArmGoal() {
-    Eigen::VectorXd q_solution;
-    q_solution << 0.0, -1.745, 0.0, 2.1817, 0.0, 0.0, 1.5707;
-    publishJointState(q_solution, true);
-    publishJointState(q_solution, false);
+    l_joint_msg_.header.stamp = this->now();
+    l_joint_msg_.position = {0.0, -1.745, 0.0, 2.1817, 0.0, 0.0, 1.5707};
+    l_joint_publisher_->publish(l_joint_msg_);
+    r_joint_msg_.header.stamp = this->now();
+    r_joint_msg_.position = {0.0, -1.745, 0.0, 2.1817, 0.0, 0.0, 1.5707};
+    r_joint_publisher_->publish(r_joint_msg_);
 }
-void XRNode::EnableAgxArm(bool enable) {
+void XRNode::EnableArmServo(bool enable) {
     auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
     request->data = enable;
     l_enable_agx_arm_client_->async_send_request(request);
@@ -965,25 +977,113 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
             // ==== 长按检测逻辑 ====
             auto current_time = std::chrono::steady_clock::now();
 
-            // 使能 Y & B 使能
+            // 长按 X & A 双臂伸臂
+            if (custom_msg.left_controller.primary_button && custom_msg.right_controller.primary_button) {
+                if (!dual_primary_pressed_) {
+                    dual_primary_pressed_ = true;
+                    dual_primary_press_start_ = current_time;
+                    dual_primary_press_sent_ = false;  // 重置发送标志
+                    // RCLCPP_INFO(this->get_logger(), "Dual primary button pressed, starting timer...");
+                } else {
+                    // 按钮持续按住，检查是否超过pressed_time秒
+                    auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                        current_time - dual_primary_press_start_).count();
+
+                    if (duration >= pressed_time && !dual_primary_press_sent_) {
+                        RCLCPP_INFO(this->get_logger(), 
+                            "Dual primary button held for %ld seconds, sending goal", 
+                            duration);
+                        dual_primary_press_sent_ = true;  // 标记已发送，防止重复发送
+                        SendExtendArmGoal();
+                    }
+                }
+            } else {
+                // 按钮未被按下，重置状态
+                if (dual_primary_pressed_) {
+                    // RCLCPP_INFO(this->get_logger(), "Dual secondary button released");
+                }
+                dual_primary_pressed_ = false;
+                dual_primary_press_sent_ = false;
+            }
+
+            // 左复位
+            if (custom_msg.left_controller.primary_button && !custom_msg.right_controller.primary_button) {
+                if (!left_primary_pressed_) {
+                    left_primary_pressed_ = true;
+                    left_primary_press_start_ = current_time;
+                    left_primary_press_sent_ = false;  // 重置发送标志
+                    // RCLCPP_INFO(this->get_logger(), "Left primary button pressed, starting timer...");
+                } else {
+                    // 按钮持续按住，检查是否超过pressed_time秒
+                    auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                        current_time - left_primary_press_start_).count();
+                    
+                    if (duration >= pressed_time && !left_primary_press_sent_) {
+                        // 长按超过pressed_time秒且未发送过，执行伸臂任务
+                        RCLCPP_INFO(this->get_logger(), 
+                            "Left primary button held for %ld seconds, sending goal", 
+                            duration);
+                        left_primary_press_sent_ = true;  // 标记已发送，防止重复发送
+                        SendLResetArmGoal();
+                    }
+                }
+            } else {
+                // 按钮未被按下，重置状态
+                if (left_primary_pressed_) {
+                    // RCLCPP_INFO(this->get_logger(), "Left primary button released");
+                }
+                left_primary_pressed_ = false;
+                left_primary_press_sent_ = false;
+            }
+
+            // 右复位
+            if (custom_msg.right_controller.primary_button && !custom_msg.left_controller.primary_button) {
+                if (!right_primary_pressed_) {
+                    right_primary_pressed_ = true;
+                    right_primary_press_start_ = current_time;
+                    right_primary_press_sent_ = false;  // 重置发送标志
+                    // RCLCPP_INFO(this->get_logger(), "Right primary button pressed, starting timer...");
+                } else {
+                    // 按钮持续按住，检查是否超过pressed_time秒
+                    auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                        current_time - right_primary_press_start_).count();
+                    
+                    if (duration >= pressed_time && !right_primary_press_sent_) {
+                        // 长按超过pressed_time秒且未发送过，执行收臂任务
+                        RCLCPP_INFO(this->get_logger(), 
+                            "Right primary button held for %ld seconds, sending goal", 
+                            duration);
+                        right_primary_press_sent_ = true;  // 标记已发送，防止重复发送
+                        SendRResetArmGoal();
+                    }
+                }
+            } else {
+                // 按钮未被按下，重置状态
+                if (right_primary_pressed_) {
+                    // RCLCPP_INFO(this->get_logger(), "Right primary button released");
+                }
+                right_primary_pressed_ = false;
+                right_primary_press_sent_ = false;
+            }
+
+
+            // 长按 Y & B 使能
             if (custom_msg.left_controller.secondary_button && custom_msg.right_controller.secondary_button) {
                 if (!dual_secondary_pressed_) {
                     dual_secondary_pressed_ = true;
                     dual_secondary_press_start_ = current_time;
-                    dual_enable_sent_ = false;  // 重置发送标志
+                    dual_secondary_press_sent_ = false;  // 重置发送标志
                     // RCLCPP_INFO(this->get_logger(), "Dual secondary button pressed, starting timer...");
                 } else {
-                    // 按钮持续按住，检查是否超过pressed_time秒
                     auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                         current_time - dual_secondary_press_start_).count();
 
-                    if (duration >= pressed_time && !dual_enable_sent_) {
-                        // 长按超过pressed_time秒且未发送过，执行使能任务
+                    if (duration >= pressed_time && !dual_secondary_press_sent_) {
                         RCLCPP_INFO(this->get_logger(), 
-                            "Dual secondary button held for %ld seconds, sending enable goal", 
+                            "Dual secondary button held for %ld seconds, sending goal", 
                             duration);
-                        EnableAgxArm(true);
-                        dual_enable_sent_ = true;  // 标记已发送，防止重复发送
+                        dual_secondary_press_sent_ = true;  // 标记已发送，防止重复发送
+                        EnableArmServo(true);
                     }
                 }
             } else {
@@ -992,28 +1092,28 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     // RCLCPP_INFO(this->get_logger(), "Dual secondary button released");
                 }
                 dual_secondary_pressed_ = false;
-                dual_enable_sent_ = false;
+                dual_secondary_press_sent_ = false;
             }
 
-            // 伸臂
+            // Y 双臂收臂
             if (custom_msg.left_controller.secondary_button && !custom_msg.right_controller.secondary_button) {
                 if (!left_secondary_pressed_) {
                     left_secondary_pressed_ = true;
                     left_secondary_press_start_ = current_time;
-                    left_extend_sent_ = false;  // 重置发送标志
+                    left_secondary_press_sent_ = false;  // 重置发送标志
                     // RCLCPP_INFO(this->get_logger(), "Left secondary button pressed, starting timer...");
                 } else {
                     // 按钮持续按住，检查是否超过pressed_time秒
                     auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                         current_time - left_secondary_press_start_).count();
                     
-                    if (duration >= pressed_time && !left_extend_sent_) {
+                    if (duration >= pressed_time && !left_secondary_press_sent_) {
                         // 长按超过pressed_time秒且未发送过，执行伸臂任务
                         RCLCPP_INFO(this->get_logger(), 
-                            "Left secondary button held for %ld seconds, sending extend arm goal", 
+                            "Left secondary button held for %ld seconds, sending goal", 
                             duration);
-                        SendExtendArmGoal();
-                        left_extend_sent_ = true;  // 标记已发送，防止重复发送
+                        left_secondary_press_sent_ = true;  // 标记已发送，防止重复发送
+                        SendRetractArmGoal();
                     }
                 }
             } else {
@@ -1022,38 +1122,39 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     // RCLCPP_INFO(this->get_logger(), "Left secondary button released");
                 }
                 left_secondary_pressed_ = false;
-                left_extend_sent_ = false;
+                left_secondary_press_sent_ = false;
             }
 
-            // 收臂
-            if (custom_msg.right_controller.secondary_button && !custom_msg.left_controller.secondary_button) {
-                if (!right_secondary_pressed_) {
-                    right_secondary_pressed_ = true;
-                    right_secondary_press_start_ = current_time;
-                    right_retract_sent_ = false;  // 重置发送标志
-                    // RCLCPP_INFO(this->get_logger(), "Right secondary button pressed, starting timer...");
-                } else {
-                    // 按钮持续按住，检查是否超过pressed_time秒
-                    auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-                        current_time - right_secondary_press_start_).count();
+            // // B 开启力控
+            // if (custom_msg.right_controller.secondary_button && !custom_msg.left_controller.secondary_button) {
+            //     if (!right_secondary_pressed_) {
+            //         right_secondary_pressed_ = true;
+            //         right_secondary_press_start_ = current_time;
+            //         right_secondary_press_sent_ = false;  // 重置发送标志
+            //         // RCLCPP_INFO(this->get_logger(), "Right secondary button pressed, starting timer...");
+            //     } else {
+            //         // 按钮持续按住，检查是否超过pressed_time秒
+            //         auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+            //             current_time - right_secondary_press_start_).count();
                     
-                    if (duration >= pressed_time && !right_retract_sent_) {
-                        // 长按超过pressed_time秒且未发送过，执行收臂任务
-                        RCLCPP_INFO(this->get_logger(), 
-                            "Right secondary button held for %ld seconds, sending retract arm goal", 
-                            duration);
-                        SendRetractArmGoal();
-                        right_retract_sent_ = true;  // 标记已发送，防止重复发送
-                    }
-                }
-            } else {
-                // 按钮未被按下，重置状态
-                if (right_secondary_pressed_) {
-                    // RCLCPP_INFO(this->get_logger(), "Right secondary button released");
-                }
-                right_secondary_pressed_ = false;
-                right_retract_sent_ = false;
-            }
+            //         if (duration >= pressed_time && !right_secondary_press_sent_) {
+            //             // 长按超过pressed_time秒且未发送过，执行收臂任务
+            //             RCLCPP_INFO(this->get_logger(), 
+            //                 "Right secondary button held for %ld seconds, sending goal", 
+            //                 duration);
+            //             right_secondary_press_sent_ = true;  // 标记已发送，防止重复发送
+            //             EnableArmCompliance(true);
+            //         }
+            //     }
+            // } else {
+            //     // 按钮未被按下，重置状态
+            //     if (right_secondary_pressed_) {
+            //         // RCLCPP_INFO(this->get_logger(), "Right secondary button released");
+            //     }
+            //     right_secondary_pressed_ = false;
+            //     right_secondary_press_sent_ = false;
+            // }
+
 
         } catch (const std::exception& e) {
             std::cerr << "Parse failed: " << e.what() << std::endl;

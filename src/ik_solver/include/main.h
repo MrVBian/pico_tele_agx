@@ -156,7 +156,7 @@ private:
 
 
     // ==== 长按检测相关变量 ====
-    int pressed_time = 3;
+    int pressed_time = 2;
     bool left_secondary_pressed_;
     bool right_secondary_pressed_;
     bool dual_secondary_pressed_;

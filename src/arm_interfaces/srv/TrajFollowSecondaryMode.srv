@@ -1,0 +1,5 @@
+uint8 trajectory_following_mode
+uint8 trajectory_following_secondary_mode
+
+---
+bool result

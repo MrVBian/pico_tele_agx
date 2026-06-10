@@ -38,14 +38,6 @@ if(EXISTS ${ROBOT_SDK})
   set(PICORobotSDK_INCLUDE ${ROBOT_SDK}/include)
   set(PICORobotSDK_LIB_PATH ${ROBOT_SDK}/linux/64)
   set(PICORobotSDK_LIB_NAME PXREARobotSDK)
-else()
-  set(ROBOT_SDK "/opt/apps/picobusinesssuite/SDK/clientso/64")
-  if(NOT EXISTS ${ROBOT_SDK})
-    message(FATAL_ERROR "robot sdk not found. Please install robot sdk first.") 
-  endif()
-  set(PICORobotSDK_INCLUDE ${ROBOT_SDK})
-  set(PICORobotSDK_LIB_PATH ${ROBOT_SDK})
-  set(PICORobotSDK_LIB_NAME PXREARobotSDK)
 endif()
 
 # 使用 find_library 精确定位 SDK 库文件
@@ -97,6 +89,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${HPP_FCL_INCLUDE_DIRS}
     /usr/local/include
     ${PICORobotSDK_INCLUDE}
+)
+
+# 在 add_executable 之后，install 之前添加
+set_target_properties(ik_solver PROPERTIES
+    INSTALL_RPATH "/opt/apps/roboticsservice/SDK/linux/64"
+    BUILD_RPATH "/opt/apps/roboticsservice/SDK/linux/64"
 )
 
 # ============ 7. 安装 ============

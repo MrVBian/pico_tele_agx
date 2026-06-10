@@ -293,23 +293,23 @@ XRNode::XRNode() : Node("pico") {
     l_enable_agx_arm_client_ = this->create_client<std_srvs::srv::SetBool>("/left/enable_agx_arm");
     r_enable_agx_arm_client_ = this->create_client<std_srvs::srv::SetBool>("/right/enable_agx_arm");
     
-    std::string urdf_path = "/projects/pico_tele_agx/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/nero/urdf/nero_description.urdf";
-    std::string ee_frame_name = "joint7";
+    std::string urdf_path = "/projects/pico_tele_agx/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/piper/urdf/piper_description.urdf";
+    std::string ee_frame_name = "joint6";
     ik_solver_left_ = std::make_shared<IKSolver>(urdf_path, ee_frame_name);
     ik_solver_right_ = std::make_shared<IKSolver>(urdf_path, ee_frame_name);
     // Eigen::VectorXd q_home(7);
     // q_home << 0.0, 0.0, 0.0, 1.5707, 0.0, 0, 1.5707;
-    last_q_left_ = Eigen::VectorXd::Zero(7);
-    last_q_right_ = Eigen::VectorXd::Zero(7);
+    last_q_left_ = Eigen::VectorXd::Zero(6);
+    last_q_right_ = Eigen::VectorXd::Zero(6);
     // 初始化关节消息模板
     l_joint_msg_.header.frame_id = "base_link";
-    l_joint_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"};
-    l_joint_msg_.position.resize(7);
+    l_joint_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
+    l_joint_msg_.position.resize(6);
     l_joint_msg_.velocity.clear();
     l_joint_msg_.effort.clear();
     r_joint_msg_.header.frame_id = "base_link";
-    r_joint_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"};
-    r_joint_msg_.position.resize(7);
+    r_joint_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
+    r_joint_msg_.position.resize(6);
     r_joint_msg_.velocity.clear();
     r_joint_msg_.effort.clear();
     l_gripper_msg_.header.frame_id = "base_link";
@@ -374,34 +374,30 @@ void XRNode::lJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg) {
     if (l_real_has_new_joint_ == false) {
         l_real_has_new_joint_ = true;
 
-        Eigen::VectorXd q_home(7);
+        Eigen::VectorXd q_home(6);
         q_home <<  msg->position[0], msg->position[1], msg->position[2],
-                   msg->position[3], msg->position[4], msg->position[5],
-                   msg->position[6];
+                   msg->position[3], msg->position[4], msg->position[5];
         last_q_left_ = q_home;
 
-        RCLCPP_INFO(this->get_logger(), "\033[1;33mLeft Real Joint Topic: %s\n- %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f\033[0m", 
+        RCLCPP_INFO(this->get_logger(), "\033[1;33mLeft Real Joint Topic: %s\n- %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f\033[0m", 
                     l_real_joint_subscriber_->get_topic_name(),
                     last_q_left_[0], last_q_left_[1], last_q_left_[2],
-                    last_q_left_[3], last_q_left_[4], last_q_left_[5],
-                    last_q_left_[6]);
+                    last_q_left_[3], last_q_left_[4], last_q_left_[5]);
     }
 }
 void XRNode::rJointCallback(const sensor_msgs::msg::JointState::SharedPtr msg) {
     if (r_real_has_new_joint_ == false) {
         r_real_has_new_joint_ = true;
 
-        Eigen::VectorXd q_home(7);
+        Eigen::VectorXd q_home(6);
         q_home <<  msg->position[0], msg->position[1], msg->position[2],
-                   msg->position[3], msg->position[4], msg->position[5],
-                   msg->position[6];
+                   msg->position[3], msg->position[4], msg->position[5];
         last_q_right_ = q_home;
 
-        RCLCPP_INFO(this->get_logger(), "\033[1;33mRight Real Joint Topic: %s\n- %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f\033[0m", 
+        RCLCPP_INFO(this->get_logger(), "\033[1;33mRight Real Joint Topic: %s\n- %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f\033[0m", 
                     r_real_joint_subscriber_->get_topic_name(),
                     last_q_right_[0], last_q_right_[1], last_q_right_[2],
-                    last_q_right_[3], last_q_right_[4], last_q_right_[5],
-                    last_q_right_[6]);
+                    last_q_right_[3], last_q_right_[4], last_q_right_[5]);
     }
 }
 
@@ -433,13 +429,13 @@ bool XRNode::isJointJump(const Eigen::VectorXd& q_new, const Eigen::VectorXd& q_
 void XRNode::publishJointState(const Eigen::VectorXd& q, bool is_left) {
     if (is_left) {
         l_joint_msg_.header.stamp = this->now();
-        for (int i = 0; i < 7; ++i) {
+        for (int i = 0; i < 6; ++i) {
             l_joint_msg_.position[i] = q(i);
         }
         l_joint_publisher_->publish(l_joint_msg_);
     } else {
         r_joint_msg_.header.stamp = this->now();
-        for (int i = 0; i < 7; ++i) {
+        for (int i = 0; i < 6; ++i) {
             r_joint_msg_.position[i] = q(i);
         }
         r_joint_publisher_->publish(r_joint_msg_);
@@ -447,26 +443,45 @@ void XRNode::publishJointState(const Eigen::VectorXd& q, bool is_left) {
 }
 void XRNode::SendLResetArmGoal() {
     l_joint_msg_.header.stamp = this->now();
-    l_joint_msg_.position = {0.0, 0.0, 0.0, 1.5707, 0.0, 0, 1.5707};
+    l_joint_msg_.position = {0.0, 0.268, -0.75, 0.0, 1.0, 0.0};
     l_joint_publisher_->publish(l_joint_msg_);
 }
 void XRNode::SendRResetArmGoal() {
     r_joint_msg_.header.stamp = this->now();
-    r_joint_msg_.position = {0.0, 0.0, 0.0, 1.5707, 0.0, 0, 1.5707};
+    r_joint_msg_.position = {0.0, 0.268, -0.75, 0.0, 1.0, 0.0};
     r_joint_publisher_->publish(r_joint_msg_);
 }
 void XRNode::SendExtendArmGoal() {
-    Eigen::VectorXd q_solution;
-    q_solution << 0.0, 0.0, 0.0, 1.5707, 0.0, 0.0, 1.5707;
-    publishJointState(q_solution, true);
-    publishJointState(q_solution, false);
+    Eigen::VectorXd q_solution(6);
+    q_solution << 0.0, 0.268, -0.75, 0.0, 1.0, 0.0;
+
+    rclcpp::Time stamp = this->now();
+    l_joint_msg_.header.stamp = stamp;
+    r_joint_msg_.header.stamp = stamp;
+
+    // 关键修复：调整 position 向量大小
+    l_joint_msg_.position.resize(6);
+    r_joint_msg_.position.resize(6);
+
+    for (int i = 0; i < 6; ++i) {
+        l_joint_msg_.position[i] = q_solution(i);
+        r_joint_msg_.position[i] = q_solution(i);
+    }
+
+    // 检查发布器是否有效
+    if (l_joint_publisher_) {
+        l_joint_publisher_->publish(l_joint_msg_);
+    }
+    if (r_joint_publisher_) {
+        r_joint_publisher_->publish(r_joint_msg_);
+    }
 }
 void XRNode::SendRetractArmGoal() {
     l_joint_msg_.header.stamp = this->now();
-    l_joint_msg_.position = {0.0, -1.745, 0.0, 2.1817, 0.0, 0.0, 1.5707};
+    l_joint_msg_.position = {0.0, 0.0, 0.0, 0.0, 0.3, 0.0};
     l_joint_publisher_->publish(l_joint_msg_);
     r_joint_msg_.header.stamp = this->now();
-    r_joint_msg_.position = {0.0, -1.745, 0.0, 2.1817, 0.0, 0.0, 1.5707};
+    r_joint_msg_.position = {0.0, 0.0, 0.0, 0.0, 0.3, 0.0};
     r_joint_publisher_->publish(r_joint_msg_);
 }
 void XRNode::EnableArmServo(bool enable) {
@@ -603,8 +618,8 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     double dy_ctl = ps.pose.position.y - l_ctl_init_pose.pose.position.y;
                     double dz_ctl = ps.pose.position.z - l_ctl_init_pose.pose.position.z;
                     
-                    double dx_real = dz_ctl;
-                    double dy_real = dx_ctl;
+                    double dx_real = -dz_ctl;
+                    double dy_real = -dx_ctl;
                     double dz_real = dy_ctl;
                     
                     tf2::Quaternion q_ctl_init(
@@ -631,9 +646,9 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     delYaw   *= 180.0 / M_PI;
 
                     tf2::Matrix3x3 R_ctl_to_real(
-                        0, 0, 1,   // 手柄Z后 → 机器人X后
-                        1, 0, 0,   // 手柄X右 → 机器人Y右
-                        0, 1, 0    // 手柄Y上 → 机器人Z上
+                        0,  0, -1,   // 手柄Z后 → 机器人X后
+                        -1, 0,  0,   // 手柄X右 → 机器人Y右
+                        0,  1,  0    // 手柄Y上 → 机器人Z上
                     );
                     tf2::Matrix3x3 R_real_rel = R_ctl_to_real * R_ctl_rel * R_ctl_to_real.transpose();
 
@@ -645,9 +660,14 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     result.header.stamp = this->now();
                     result.header.frame_id = "real";
 
+
                     result.pose.position.x = l_real_pose.pose.position.x + dx_real;
                     result.pose.position.y = l_real_pose.pose.position.y + dy_real;
                     result.pose.position.z = l_real_pose.pose.position.z + dz_real;
+
+                    // result.pose.position.x = l_real_pose.pose.position.x + dx_real;
+                    // result.pose.position.y = l_real_pose.pose.position.y + dy_real;
+                    // result.pose.position.z = l_real_pose.pose.position.z + dz_real;
 
                     tf2::Quaternion q_real_current(
                         l_real_pose.pose.orientation.x,
@@ -727,7 +747,7 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                                 "│ Real world new rot               │ r:%8.2f  p:%8.2f  y:%8.2f                              │\n"
                                 "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
                                 "│ Left arm topic                   │ %-49s │\n"
-                                "│ LEFT arm joint                   │ %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f │\n"
+                                "│ LEFT arm joint                   │ %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f │\n"
                                 "└──────────────────────────────────┴─────────────────────────────────────────────────────────┘",
                                 l_real_pose.pose.position.x, l_real_pose.pose.position.y, l_real_pose.pose.position.z,
                                 dx_real, dy_real, dz_real,
@@ -738,7 +758,7 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                                 roll, pitch, yaw,
                                 
                                 l_joint_publisher_->get_topic_name(),
-                                q_solution(0), q_solution(1), q_solution(2), q_solution(3), q_solution(4), q_solution(5), q_solution(6)
+                                q_solution(0), q_solution(1), q_solution(2), q_solution(3), q_solution(4), q_solution(5)
                             );
 
                             publishJointState(q_solution, true);  // true表示左臂
@@ -759,9 +779,9 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
 
             if (custom_msg.left_controller.trigger == 1.0f && left_gripper == false) {
                 double val = 0.0f;
-                publishGripperState(gripper_open_angle_, true);
+                publishGripperState(val, true);
                 left_gripper = true;
-                RCLCPP_INFO(this->get_logger(), "%s Left gripper: [%f]", l_gripper_joint_publisher_->get_topic_name(), gripper_open_angle_);
+                RCLCPP_INFO(this->get_logger(), "%s Left gripper: [%f]", l_gripper_joint_publisher_->get_topic_name(), val);
             }
             else if (custom_msg.left_controller.trigger != 1.0f && left_gripper == true) {
                 double val = gripper_open_angle_;
@@ -806,8 +826,8 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     double dy_ctl = ps.pose.position.y - r_ctl_init_pose.pose.position.y;
                     double dz_ctl = ps.pose.position.z - r_ctl_init_pose.pose.position.z;
                     
-                    double dx_real = dz_ctl;
-                    double dy_real = dx_ctl;
+                    double dx_real = -dz_ctl;
+                    double dy_real = -dx_ctl;
                     double dz_real = dy_ctl;
                     
                     tf2::Quaternion q_ctl_init(
@@ -834,9 +854,9 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     delYaw   *= 180.0 / M_PI;
 
                     tf2::Matrix3x3 R_ctl_to_real(
-                        0, 0, 1,   // 手柄Z后 → 机器人X后
-                        1, 0, 0,   // 手柄X右 → 机器人Y右
-                        0, 1, 0    // 手柄Y上 → 机器人Z上
+                        0,  0, -1,   // 手柄Z后 → 机器人X后
+                        -1, 0,  0,   // 手柄X右 → 机器人Y右
+                        0,  1,  0    // 手柄Y上 → 机器人Z上
                     );
                     tf2::Matrix3x3 R_real_rel = R_ctl_to_real * R_ctl_rel * R_ctl_to_real.transpose();
 
@@ -848,9 +868,14 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                     result.header.stamp = this->now();
                     result.header.frame_id = "real";
 
+
                     result.pose.position.x = r_real_pose.pose.position.x + dx_real;
                     result.pose.position.y = r_real_pose.pose.position.y + dy_real;
                     result.pose.position.z = r_real_pose.pose.position.z + dz_real;
+
+                    // result.pose.position.x = r_real_pose.pose.position.x + dx_real;
+                    // result.pose.position.y = r_real_pose.pose.position.y + dy_real;
+                    // result.pose.position.z = r_real_pose.pose.position.z + dz_real;
 
                     tf2::Quaternion q_real_current(
                         r_real_pose.pose.orientation.x,
@@ -928,7 +953,7 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                                 "│ Real world new rot               │ r:%8.2f  p:%8.2f  y:%8.2f                              │\n"
                                 "├──────────────────────────────────┼─────────────────────────────────────────────────────────┤\n"
                                 "│ Right arm topic                  │ %-49s │\n"
-                                "│ Right arm joint                  │ %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f │\n"
+                                "│ Right arm joint                  │ %6.3f, %6.3f, %6.3f, %6.3f, %6.3f, %6.3f │\n"
                                 "└──────────────────────────────────┴─────────────────────────────────────────────────────────┘",
                                 r_real_pose.pose.position.x, r_real_pose.pose.position.y, r_real_pose.pose.position.z,
                                 dx_real, dy_real, dz_real,
@@ -939,7 +964,7 @@ void XRNode::OnPXREAClientCallback(void* context, PXREAClientCallbackType type, 
                                 roll, pitch, yaw,
 
                                 r_joint_publisher_->get_topic_name(),
-                                q_solution(0), q_solution(1), q_solution(2), q_solution(3), q_solution(4), q_solution(5), q_solution(6)
+                                q_solution(0), q_solution(1), q_solution(2), q_solution(3), q_solution(4), q_solution(5)
                             );
 
                             publishJointState(q_solution, false);  // false表示右臂
